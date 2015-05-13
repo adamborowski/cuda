@@ -80,13 +80,13 @@ __host__ __device__ int getAggOffset(const int numSamples, const int aggType) {
 __global__ void agg_10s_1m(int numSamples, float* samples, int cacheSize, float * d_aggr_min, float * d_aggr_max, float * d_aggr_avg) {
 	const int globalID = blockDim.x * blockIdx.x + threadIdx.x;
 	const int localID = threadIdx.x;
+	const int threadsPerBlock = blockDim.x;
+	const int numChunks = getAggCount(blockDim.x, AGG_SEC_10);
 
 	extern __shared__ float shared[];
 	float* s_min = shared;
-	int numChunks = getAggCount(blockDim.x, AGG_SEC_10);
-
-	float* s_max = &(shared[numChunks]);
-	float* s_avg = &(s_max[numChunks]);
+	float* s_max = &(s_min[threadsPerBlock]);
+	float* s_avg = &(s_max[threadsPerBlock]);
 
 #ifdef DEBUG
 	if (globalID == 0) {
@@ -117,31 +117,39 @@ __global__ void agg_10s_1m(int numSamples, float* samples, int cacheSize, float 
 		}
 		aAvg /= chunkSize;
 		//write to shared memory
-		printf("\nlocalId: %d\n", localID);
-		//todo chyna poniżej sie zatrzymuje!!
 		s_min[localID] = aMin; //TODO block id zamiast globalId???
 		s_max[localID] = aMax;
 		s_avg[localID] = aAvg;
 #ifdef DEBUG
 		//shared memory write tests
-
 		if (s_min[localID] != aMin)
-			printf("failed to write to shared s_min at tid %d", globalID);
+			printf("failed to write to shared s_min at lid %d \t %f != %f\n", localID, s_min[localID], aMin);
 		if (s_max[localID] != aMax)
-			printf("failed to write to shared s_max at tid %d", globalID);
+			printf("failed to write to shared s_max at lid %d \t %f != %f\n", localID, s_max[localID], aMax);
 		if (s_avg[localID] != aAvg)
-			printf("failed to write to shared s_avg at tid %d", globalID);
+			printf("failed to write to shared s_avg at lid %d \t %f != %f\n", localID, s_avg[localID], aAvg);
 #endif
 		//also write to global memory as a result of AGG_10s
 		int offset10s = getAggOffset(numSamples, AGG_SEC_10); //we got offset to write 10s aggreations
-		d_aggr_min[offset10s + globalID] = aMin;
-		d_aggr_max[offset10s + globalID] = aMax;
-		d_aggr_avg[offset10s + globalID] = aAvg;
-
+		int globalPtr= offset10s + globalID;
+		d_aggr_min[globalPtr] = aMin;
+		d_aggr_max[globalPtr] = aMax;
+		d_aggr_avg[globalPtr] = aAvg;
+#ifdef DEBUG
+		//global memory write tests
+		if (d_aggr_min[globalPtr] != aMin)
+			printf("failed to write to global d_aggr_min at gidx %d \t %f != %f\n", globalPtr, d_aggr_min[globalPtr], aMin);
+		if (d_aggr_max[globalPtr] != aMax)
+			printf("failed to write to global d_aggr_max at gidx %d \t %f != %f\n", globalPtr, d_aggr_max[globalPtr], aMax);
+		if (d_aggr_avg[globalPtr] != aAvg)
+			printf("failed to write to global d_aggr_acg at gidx %d \t %f != %f\n", globalIndex, d_aggr_avg[globalIndex], aAvg);
+#endif
 	}
-	if (globalID == 0) {
+	//TODO można założyć że aggr_sec_10 juz się ładnie odkładają do shared i global
+	//teraz można zacząć robić syncthreads i będzie ok
+	if (globalID < 10) {
 
-		printf("min(0) = %f, max(0) = %f, avg(0) = %f\n", s_min[0], s_max[0], s_avg[0]);
+		printf("min(0) = %f, max(0) = %f, avg(0) = %f\n", d_aggr_min[globalID], d_aggr_max[globalID], d_aggr_avg[globalID]);
 	}
 
 }
@@ -171,7 +179,7 @@ void process(const char* name, int argc, char **argv) {
 	int threadsPerBlock = 512;
 	//tworzymy tyle wątków ile potrzeba do policzenia najmniejszej agregacji
 	int blocksPerGrid = divceil(getAggCount(numSamples, AGG_SEC_10), threadsPerBlock);
-	int cacheSize = getAggCount(threadsPerBlock, AGG_SEC_10) * sizeof(float) * NUM_AGGREGATORS;
+	int cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;	//every thread calculates AGG_SEC_10{min, max,avg}
 
 #ifdef DEBUG
 	printf("threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, sharedSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
