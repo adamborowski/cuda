@@ -21,95 +21,56 @@ double mclock() {
 	usec = double(tp.tv_usec) / 1E6;
 	return sec + usec;
 }
-
-__global__ void dot1(int N, const float *a, const float *b, float *partialSum) {
-
-	//tutaj odpala się kilka wątków w jednym bloku<<
-	extern __shared__ float c_shared[];
-	int i = blockDim.x * blockIdx.x + threadIdx.x;
-	int localI = threadIdx.x;
-	int globalI = blockIdx.x;
-	//wymnazanie
-	if (i < N) {
-		c_shared[localI] = a[i] * b[i];
-//		printf("c_shared[localI %d]=%f * %f\n", i, a[i], b[i]);
-	}
-
-	int leftPtr, rightPtr;
-	int blockN = blockDim.x;
-	//jeśli jest to ostatni block, to ma on mniej lub tyle samo jeśli jest całkowita wielokrotność
-	if (blockIdx.x == gridDim.x - 1)
-		blockN = N % blockN;
-	if (blockN == 0)
-		blockN = N;
-//	printf("block %d blockN %d", blockIdx.x, blockN);
-	//poniżej nie N tylko ilość thread in block
-
-	for (int skip = 1; skip < blockN; skip <<= 1) {
-		__syncthreads();
-
-		if (i < N) { //suma czesciowa
-			leftPtr = localI * skip * 2;
-			rightPtr = leftPtr + skip;
-			if (rightPtr < blockN) {
-//				printf(">>DOT1 %d.%d skip: %d, %d+%d, %.0f+%.0f\n", blockIdx.x, threadIdx.x, skip, leftPtr, rightPtr, c_shared[leftPtr], c_shared[rightPtr]);
-				c_shared[leftPtr] += c_shared[rightPtr];
-			}
-		}
-
-	}
-
-//    __syncthreads();//nie trzeba syncrhonizować, wątek 0 ma wszystko co potrzeba
-	if (localI == 0 && i < N) {
-		partialSum[globalI] = c_shared[0];
-//		printf("part %d = %f\n", globalI, partialSum[globalI]);
-	}
-//    printf("****************** DOT1 finish i=%d, ", i);
+__host__ __device__ int getAggCount(const int numSamples, const int aggType) {
+	return divceil(numSamples, aggType);
 }
-
 /**
- * Poniższa funkcja robi redukcję a wynik zostaje w pierwszym elemencie
- * musi być wykonana w jednym bloku, jeśli wątków będzie za mało, trzeba w pętli wykonać jakieś machlojstwo
- */__global__ void dot2(int vectorSize, float *partialSum, int numBlocks) {
-//    printf(">>DOT2\n");
-	extern __shared__ float c_shared[];
-	int i = blockDim.x * blockIdx.x + threadIdx.x;
-	//cache:
-//    printf("to shared i=%d: %f", i, partialSum[i]);
-	if (i < numBlocks) {
-//		printf("to shared i=%d: %f\n", i, partialSum[i]);
-		c_shared[i] = partialSum[i];
+ * Offset of tree heap. The smallest aggregation is at the begining.
+ * 1s 1s 1s 1s 1s 1s 1s 1s 1s 1s 1s 1s 1s 1s 1s 1s...
+ * 10s 10s 10s 10s 10s...
+ * 1m 1m 1m 1m 1m...
+ * 10m 10m 10m...
+ * 30m 30m...
+ * 1h 1h...
+ * 24h...
+ */
+__host__ __device__ int getAggOffset(const int numSamples, const int aggType) {
+	int offset = 0;
+	switch (aggType) { //in this switch if any case will occur, we continue to each next case (don't break)
+	case AGG_ALL:
+		offset += getAggCount(numSamples, AGG_YEAR);
+		/* no break */
+	case AGG_YEAR:
+		offset += getAggCount(numSamples, AGG_HOUR_24);
+		/* no break */
+	case AGG_HOUR_24:
+		offset += getAggCount(numSamples, AGG_HOUR);
+		/* no break */
+	case AGG_HOUR:
+		offset += getAggCount(numSamples, AGG_MIN_30);
+		/* no break */
+	case AGG_MIN_30:
+		offset += getAggCount(numSamples, AGG_MIN_10);
+		/* no break */
+	case AGG_MIN_10:
+		offset += getAggCount(numSamples, AGG_MIN);
+		/* no break */
+	case AGG_MIN:
+		offset += getAggCount(numSamples, AGG_SEC_10);
+		/* no break */
+//	case AGG_SEC_10:
+		//we don't put 1s so we shouldn't add offset for it
+		//offset += divceil(numSamples, AGG_SEC_1);
+//		;
+		/* no break */
+//	case AGG_SEC_1:
+		//we have nothing before to add offset
+//		;
 	}
-
-	int numParts = numBlocks;
-	if (numParts > vectorSize)
-		numParts = vectorSize;
-	int localI = i;
-	int skip;
-	int leftPtr, rightPtr;
-
-	for (skip = 1; skip < numParts; skip <<= 1) {
-		__syncthreads();
-		if (i < numParts) { //suma czesciowa
-			leftPtr = localI * skip * 2;
-			rightPtr = leftPtr + skip;
-			if (rightPtr < numParts) {
-//				printf(">>DOT1 %d.%d skip: %d, %d+%d\n", blockIdx.x, threadIdx.x, skip, leftPtr, rightPtr);
-				c_shared[leftPtr] += c_shared[rightPtr];
-			}
-		}
-	}
-
-//    __syncthreads();//wątek zerowy zapisuje już do c_shared[0] dlatego nie trzeba synchronizować
-//    printf("i: %d %f\n", i, c_shared[0]);
-	if (i == 0) {
-		partialSum[0] = c_shared[0];
-//		printf("DOT2: %f\n", partialSum[0]);
-	}
-
+	return offset;
 }
 
-__global__ void agg_10s_1m(int numSamples, float* samples, int cacheSize, float * d_aggr_10s_min, float * d_aggr_10s_max, float * d_aggr_10s_avg) {
+__global__ void agg_10s_1m(int numSamples, float* samples, int cacheSize, float * d_aggr_min, float * d_aggr_max, float * d_aggr_avg) {
 	int globalID = blockDim.x * blockIdx.x + threadIdx.x;
 	extern __shared__ float shared[];
 	float* s_min = shared;
@@ -150,6 +111,7 @@ __global__ void agg_10s_1m(int numSamples, float* samples, int cacheSize, float 
 		s_avg[globalID] = aAvg;
 #ifdef DEBUG
 		//shared memory write tests
+		printf("jestem");
 		if (s_min[globalID] != aMin)
 			printf("failed to write to shared s_min at tid %d", globalID);
 		if (s_max[globalID] != aMax)
@@ -158,9 +120,11 @@ __global__ void agg_10s_1m(int numSamples, float* samples, int cacheSize, float 
 			printf("failed to write to shared s_avg at tid %d", globalID);
 #endif
 		//also write to global memory as a result of AGG_10s
-		d_aggr_10s_min[globalID] = aMin;
-		d_aggr_10s_max[globalID] = aMax;
-		d_aggr_10s_avg[globalID] = aAvg;
+		int offset10s = getAggOffset(numSamples, AGG_SEC_10);//we got offset to write 10s aggreations
+		d_aggr_min[offset10s + globalID] = aMin;
+		d_aggr_max[offset10s + globalID] = aMax;
+		d_aggr_avg[offset10s + globalID] = aAvg;
+
 	}
 	if (globalID == 0) {
 
@@ -172,8 +136,8 @@ __global__ void agg_10s_1m(int numSamples, float* samples, int cacheSize, float 
 void process(const char* name, int argc, char **argv) {
 	//nowe deklaracje
 	int numSamples;
-	float *h_samples, *h_aggr_10s_min, *h_aggr_10s_max, *h_aggr_10s_avg;
-	float *d_samples, *d_aggr_10s_min, *d_aggr_10s_max, *d_aggr_10s_avg;
+	float *h_samples, *h_aggr_min, *h_aggr_max, *h_aggr_avg;
+	float *d_samples, *d_aggr_min, *d_aggr_max, *d_aggr_avg;
 	// This will pick the best possible CUDA capable device
 	initCuda(argc, argv);
 	//allocate memory on cpu
@@ -183,9 +147,9 @@ void process(const char* name, int argc, char **argv) {
 #endif
 	//allocate memory on gpu
 	checkCudaErrors(cudaMalloc((void ** ) &d_samples, numSamples * sizeof(float)));	//todo zrobić cudaMalloc dla poszczególnych agregacji
-	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_10s_min, divceil(numSamples * sizeof(float),AGG_SEC_10)));	//todo zrobić cudaMalloc dla poszczególnych agregacji
-	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_10s_max, divceil(numSamples * sizeof(float),AGG_SEC_10)));	//todo zrobić cudaMalloc dla poszczególnych agregacji
-	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_10s_avg, divceil(numSamples * sizeof(float),AGG_SEC_10)));	//todo zrobić cudaMalloc dla poszczególnych agregacji
+	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_min, getAggOffset(numSamples,AGG_ALL)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_max, getAggOffset(numSamples,AGG_ALL)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_avg, getAggOffset(numSamples,AGG_ALL)));
 	//transfer samples from cpu to gpu
 	cudaMemcpy(d_samples, h_samples, numSamples * sizeof(float), cudaMemcpyHostToDevice);
 
@@ -199,12 +163,22 @@ void process(const char* name, int argc, char **argv) {
 	printf("threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, sharedSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
 #endif
 
-	agg_10s_1m<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_10s_min, d_aggr_10s_max, d_aggr_10s_avg);
+	agg_10s_1m<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
 	cudaFree(d_samples);
 	cudaDeviceReset();
 	printf("\n\n------------------ END ------------------\n");
 
 }
 int main(int argc, char **argv) {
+//	int size = 30 * 10 * 1000;
+//	printf("offset of 10s: %d\n", getAggOffset(size, AGG_SEC_10));
+//	printf("offset of 1m: %d\n", getAggOffset(size, AGG_MIN));
+//	printf("offset of 10m: %d\n", getAggOffset(size, AGG_MIN_10));
+//	printf("offset of 30m: %d\n", getAggOffset(size, AGG_MIN_30));
+//	printf("offset of 1h: %d\n", getAggOffset(size, AGG_HOUR));
+//	printf("offset of 24h: %d\n", getAggOffset(size, AGG_HOUR_24));
+//	printf("offset of year: %d\n", getAggOffset(size, AGG_YEAR));
+//	printf("offset of all: %d\n", getAggOffset(size, AGG_ALL));
+
 	process("data/Osoba_concat.txt", argc, argv);
 }

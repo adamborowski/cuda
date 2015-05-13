@@ -77,3 +77,5 @@ void initCuda(int argc, char ** argv) {
 	}
 
 }
+
+
