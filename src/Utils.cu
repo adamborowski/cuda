@@ -50,10 +50,6 @@ void testIO() {
 	printf("Lines loaded: %d\n", count);
 }
 
-int divceil(int a, int b) {
-	return (a + b - 1) / b;
-}
-
 void initCuda(int argc, char ** argv) {
 	cudaDeviceProp deviceProp;
 	int devID = findCudaDevice(argc, (const char **) argv);
