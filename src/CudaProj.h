@@ -18,5 +18,6 @@
 #define AGG_YEAR AGG_HOUR_24*365
 #define AGG_ALL 0 // special value used in calculating offset of all heap
 
+#define BAD_CHUNK -1
 #define NUM_AGGREGATORS 3 // MIN, MAX, AVG
 #endif /* CUDAPROJ_H_ */
