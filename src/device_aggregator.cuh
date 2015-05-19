@@ -9,6 +9,13 @@
 #define DEVICE_AGGREGATOR_H_
 
 #include "device_aggregator.cuh"
+
+#ifdef DEBUG
+
+#define test(tmp, out) if (*out!=tmp) printf("\nFailed to write by localId = %d.\t%f!=%f. &out = %p.", threadIdx.x, *out, tmp, out);
+#else
+#define test(localId, tmp, out)
+#endif
 /**
  * Policzenie agregacji min max avg z krokiem
  * Wykonuje to jeden wątek
@@ -17,7 +24,7 @@ __device__ void device_aggregate(const int count, const int stepSize, const floa
 	float min = INFINITY;
 	float max = -1 * INFINITY;
 	float avg = 0;
-	float i;
+	int i;
 	for (i = 0; i < stepSize; i++) {
 		//min aggregation
 		if (minInput[i] < min) {
@@ -35,6 +42,8 @@ __device__ void device_aggregate(const int count, const int stepSize, const floa
 	*minOutput = min;
 	*maxOutput = max;
 	*avgOutput = avg;
+	//testuj zapis
+	test(min, minOutput);test(max, maxOutput);test(avg, avgOutput);
 }
 
 #endif /* DEVICE_AGGREGATOR_H_ */
