@@ -9,6 +9,7 @@
 #define DEVICE_AGGREGATOR_H_
 
 #include "device_aggregator.cuh"
+#include <helper_cuda.h>
 
 #ifdef DEBUG
 
@@ -20,7 +21,7 @@
  * Policzenie agregacji min max avg z krokiem
  * Wykonuje to jeden wątek
  */
-__device__ void device_aggregate(const int count, const int stepSize, const float* minInput, const float* maxInput, const float* avgInput, float* minOutput, float* maxOutput, float* avgOutput) {
+__device__ void device_count_aggregation(const int stepSize, const float* minInput, const float* maxInput, const float* avgInput, float* minOutput, float* maxOutput, float* avgOutput) {
 	float min = INFINITY;
 	float max = -1 * INFINITY;
 	float avg = 0;
@@ -37,13 +38,24 @@ __device__ void device_aggregate(const int count, const int stepSize, const floa
 		//avg aggregation
 		avg += avgInput[i]; //collect sum of input
 	}
-	avg /= (float) stepSize;
+	avg /= (float) stepSize;//convert sum to average
 	//dopiero teraz wpisujmy wynik, bo nie wiemy czy output jest w szybkiej czy wolnej pamięci
 	*minOutput = min;
 	*maxOutput = max;
 	*avgOutput = avg;
 	//testuj zapis
 	test(min, minOutput);test(max, maxOutput);test(avg, avgOutput);
+}
+
+/*
+ * @param minOutputBuffer - wskaźnik do całej tablicy globalnej
+ */
+__device__ void device_aggregate(
+		int globalId, int aggType,
+		float* minInput, float* maxInput, float *aggInput,
+		float* minOutputBuffer, float* maxOutputBuffer, float* avgOutputBuffer
+		) {
+
 }
 
 #endif /* DEVICE_AGGREGATOR_H_ */

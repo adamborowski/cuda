@@ -24,11 +24,8 @@ double mclock() {
 	return sec + usec;
 }
 
-
-
-
 __global__ void agg_10s_1m(int numSamples, const float* samples, int cacheSize, float * d_aggr_min, float * d_aggr_max, float * d_aggr_avg) {
-	device_aggregate(0, 0, 0, 0, 0, 0, 0, 0);
+
 	const int globalID = blockDim.x * blockIdx.x + threadIdx.x;
 	const int localID = threadIdx.x;
 	const int threadsPerBlock = blockDim.x;
@@ -57,46 +54,18 @@ __global__ void agg_10s_1m(int numSamples, const float* samples, int cacheSize, 
 	numChunks = divceil(threadsPerBlock, chunkSize);
 
 	if (thisChunkSize > 0) { //jeśli wątek ma co robić
-		float aMin = INFINITY, aMax = -1 * INFINITY, aAvg = 0;
 		int globalIndex = globalID * chunkSize;
-		float tmp;
-		for (int i = 0; i < thisChunkSize; i++) { //we cannot exceed own chunk and the non-aligned array
-			tmp = samples[globalIndex + i]; //get global element
-			if (tmp < aMin)
-				aMin = tmp;
-			if (tmp > aMax)
-				aMax = tmp;
-			aAvg += tmp;
-		}
-		aAvg /= thisChunkSize;
-		//write to shared memory
-		s_min[localID] = aMin;
-		s_max[localID] = aMax;
-		s_avg[localID] = aAvg;
-#ifdef DEBUG
-		//shared memory write tests
-		if (s_min[localID] != aMin)
-			printf("failed to write to shared s_min at lid %d \t %f != %f\n", localID, s_min[localID], aMin);
-		if (s_max[localID] != aMax)
-			printf("failed to write to shared s_max at lid %d \t %f != %f\n", localID, s_max[localID], aMax);
-		if (s_avg[localID] != aAvg)
-			printf("failed to write to shared s_avg at lid %d \t %f != %f\n", localID, s_avg[localID], aAvg);
-#endif
+		device_count_aggregation(
+				chunkSize,
+				&samples[globalIndex + 1], &samples[globalIndex + 1], &samples[globalIndex + 1],
+				&s_min[localID], &s_max[localID], &s_avg[localID]
+				);
 		//also write to global memory as a result of AGG_10s
 		int offset10s = getAggOffset(numSamples, AGG_SEC_10); //we got offset to write 10s aggreations
 		int globalPtr = offset10s + globalID;
-		d_aggr_min[globalPtr] = aMin;
-		d_aggr_max[globalPtr] = aMax;
-		d_aggr_avg[globalPtr] = aAvg;
-#ifdef DEBUG
-		//global memory write tests
-		if (d_aggr_min[globalPtr] != aMin)
-			printf("failed to write to global d_aggr_min at gidx %d \t %f != %f\n", globalPtr, d_aggr_min[globalPtr], aMin);
-		if (d_aggr_max[globalPtr] != aMax)
-			printf("failed to write to global d_aggr_max at gidx %d \t %f != %f\n", globalPtr, d_aggr_max[globalPtr], aMax);
-		if (d_aggr_avg[globalPtr] != aAvg)
-			printf("failed to write to global d_aggr_acg at gidx %d \t %f != %f\n", globalIndex, d_aggr_avg[globalIndex], aAvg);
-#endif
+		d_aggr_min[globalPtr] = s_min[localID];
+		d_aggr_max[globalPtr] = s_max[localID];
+		d_aggr_avg[globalPtr] = s_avg[localID];
 	}
 
 	if (globalID < 10) {
@@ -214,4 +183,6 @@ int main(int argc, char **argv) {
 //	printf("offset of all: %d\n", getAggOffset(size, AGG_ALL));
 
 	process("data/Osoba_concat.txt", argc, argv);
+	CHECK_LAUNCH_ERROR()
+				;
 }
