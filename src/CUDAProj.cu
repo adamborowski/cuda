@@ -1,4 +1,4 @@
-#define DEBUG
+
 #include "Utils.h"
 #include "CudaProj.h"
 // includes, system
@@ -13,134 +13,29 @@
 // Utilities and system includes
 #include <helper_functions.h>  // helper for shared functions common to CUDA SDK samples
 #include <helper_cuda.h>       // helper function CUDA error checking and intialization
-#include "device_aggregator.cuh"
-#include "common_utils.cuh"
-double mclock() {
-	struct timeval tp;
-	double sec, usec;
-	gettimeofday(&tp, NULL);
-	sec = double(tp.tv_sec);
-	usec = double(tp.tv_usec) / 1E6;
-	return sec + usec;
-}
-
-__global__ void agg_10s_1m(int numSamples, const float* samples, int cacheSize, float * d_aggr_min, float * d_aggr_max, float * d_aggr_avg) {
-
-	const int globalID = blockDim.x * blockIdx.x + threadIdx.x;
-	const int localID = threadIdx.x;
-	const int threadsPerBlock = blockDim.x;
-#ifdef DEBUG
-	if (globalID == 0) {
-		int numThreads = blockDim.x * gridDim.x;
-		printf("real num threads: %d\n", numThreads);
-		printf("kernel address device min: %p, max: %p, avg: %p\n", d_aggr_min, d_aggr_max, d_aggr_avg);
-	}
-#endif
-	int numChunks;
-	int chunkSize, thisChunkSize;
-	extern __shared__ float shared[];
-	float* s_min = shared;
-	float* s_max = &(s_min[threadsPerBlock]);
-	float* s_avg = &(s_max[threadsPerBlock]);
-
-	/**
-	 * AGG_1s to AGG_10s
-	 * - this aggregation reads from global memory
-	 * - then calculates min, max, avg
-	 * - and stores in shared memory as 10s aggregations
-	 */
-	chunkSize = AGG_SEC_10 / AGG_SEC_1;
-	thisChunkSize = getChunkSize(numSamples, chunkSize, globalID);
-	numChunks = divceil(threadsPerBlock, chunkSize);
-
-	if (thisChunkSize > 0) { //jeśli wątek ma co robić
-		int globalIndex = globalID * chunkSize;
-		device_count_aggregation(
-				chunkSize,
-				&samples[globalIndex + 1], &samples[globalIndex + 1], &samples[globalIndex + 1],
-				&s_min[localID], &s_max[localID], &s_avg[localID]
-				);
-		//also write to global memory as a result of AGG_10s
-		int offset10s = getAggOffset(numSamples, AGG_SEC_10); //we got offset to write 10s aggreations
-		int globalPtr = offset10s + globalID;
-		d_aggr_min[globalPtr] = s_min[localID];
-		d_aggr_max[globalPtr] = s_max[localID];
-		d_aggr_avg[globalPtr] = s_avg[localID];
-	}
-
-	if (globalID < 10) {
-
-		printf("min(0) = %f, max(0) = %f, avg(0) = %f\n", d_aggr_min[globalID], d_aggr_max[globalID], d_aggr_avg[globalID]);
-	}
-	__syncthreads();
-	/**
-	 * AGG_SEC_10 to AGG_MIN from shared to shared, then copy to global
-	 */
-	chunkSize = AGG_MIN / AGG_SEC_10;
-	int lastNumChunks = numChunks; //z ilu poprzednich mini-chunków mamy generować nowy mega-chunk
-	thisChunkSize = getChunkSize(lastNumChunks, chunkSize, localID);
-	numChunks = divceil(threadsPerBlock, chunkSize);
-	int tmpMin, tmpMax, tmpAvg;
-
-	float aMin = INFINITY, aMax = -1 * INFINITY, aAvg = 0;
-	//pobierz wskaźnik na chunk w pamięci shared po poprzednim zadaniu
-	int sharedIndex = localID * chunkSize;
-
-	for (int i = 0; i < thisChunkSize; i++) {
-		//pobierz wartości kolejnych elementów chunków ale rozróżnij tablice min max avg
-		tmpMin = s_min[sharedIndex + i];
-		tmpMax = s_max[sharedIndex + i];
-		tmpAvg = s_avg[sharedIndex + i];
-		if (tmpMin < aMin)
-			aMin = tmpMin;
-		if (tmpMax > aMax)
-			aMax = tmpMax;
-		aAvg += tmpAvg;
-		if (globalID == 0) {
-			printf("chunk size: %d\n", chunkSize);
-			printf("shared Index: %d\n", sharedIndex);
-			printf("avg %f \n", aAvg);
-		}
-	}
-
-	aAvg /= thisChunkSize;
-
-	__syncthreads(); //upewnij się, że każdy wątek już odczytał pamięć shared aby można było zacząć do niej pisać
-	if (thisChunkSize > 0) { //jeśli wątek ma co robić
-		//zapisuj do shared
-		s_min[localID] = aMin;
-		s_max[localID] = aMax;
-		s_avg[localID] = aAvg;
-		//zapisuj do global jako wynik
-		int offset1m = getAggOffset(numSamples, AGG_MIN); //we got offset to write 10s aggreations
-		int globalPtr = offset1m + globalID;
-
-		d_aggr_min[globalPtr] = aMin;
-		d_aggr_max[globalPtr] = aMax;
-		d_aggr_avg[globalPtr] = aAvg;
-		if (globalID < 10) {
-			printf("min(0) = %f, max(0) = %f, avg(0) = %f\n", d_aggr_min[globalPtr], d_aggr_max[globalPtr], d_aggr_avg[globalPtr]);
-		}
-	}
-
-	__syncthreads();
-	if (globalID == 0) {
-		printf("pomyslnie skonczylo sie");
-	}
-}
+#include "kernels.cuh"
 
 void process(const char* name, int argc, char **argv) {
 //nowe deklaracje
-	int numSamples, aggHeapSize;
+	int numSamples, aggHeapCount, aggHeapSize;
 	float *h_samples, *h_aggr_min, *h_aggr_max, *h_aggr_avg;
 	float *d_samples, *d_aggr_min, *d_aggr_max, *d_aggr_avg;
 // This will pick the best possible CUDA capable device
 	initCuda(argc, argv);
 //allocate memory on cpu
 	h_samples = ReadFile(name, &numSamples);
-	aggHeapSize = getAggOffset(numSamples, AGG_ALL) * sizeof(float);
+
+	aggHeapCount = getAggOffset(numSamples, AGG_ALL);
+	aggHeapSize = aggHeapCount * sizeof(float);
+	h_aggr_min = (float*) malloc(aggHeapSize);
+	h_aggr_max = (float*) malloc(aggHeapSize);
+	h_aggr_avg = (float*) malloc(aggHeapSize);
+	cleanArray(aggHeapCount, h_aggr_min);
+	cleanArray(aggHeapCount, h_aggr_max);
+	cleanArray(aggHeapCount, h_aggr_avg);
 #ifdef DEBUG
 	printf("numSamples = %d\n", numSamples);
+	printf("heapCount = %d\n", aggHeapCount);
 	printf("heapSize = %d\n", aggHeapSize);
 
 #endif
@@ -149,40 +44,67 @@ void process(const char* name, int argc, char **argv) {
 	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_min, aggHeapSize));
 	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_max, aggHeapSize));
 	checkCudaErrors(cudaMalloc((void ** ) &d_aggr_avg, aggHeapSize));
+	//clean gpu arrays
+	checkCudaErrors(cudaMemcpy(d_aggr_min, h_aggr_min, aggHeapSize, cudaMemcpyHostToDevice));
+	checkCudaErrors(cudaMemcpy(d_aggr_max, h_aggr_max, aggHeapSize, cudaMemcpyHostToDevice));
+	checkCudaErrors(cudaMemcpy(d_aggr_avg, h_aggr_avg, aggHeapSize, cudaMemcpyHostToDevice));
 
 //transfer samples from cpu to gpu
-	cudaMemcpy(d_samples, h_samples, numSamples * sizeof(float), cudaMemcpyHostToDevice);
+	checkCudaErrors(cudaMemcpy(d_samples, h_samples, numSamples * sizeof(float), cudaMemcpyHostToDevice));
 
-	int threadsPerBlock = 512;
+//	int threadsPerBlock = 512;
+	int threadsPerBlock = AGG_TEST_108;	//TODO zoptymalizować ( AGG_TEST_18/AGG_TEST_3 )
 //tworzymy tyle wątków ile potrzeba do policzenia najmniejszej agregacji
-	int blocksPerGrid = divceil(getAggCount(numSamples, AGG_SEC_10), threadsPerBlock);
+	int blocksPerGrid = divceil(getAggCount(numSamples, AGG_SAMPLE), threadsPerBlock);
 	int cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;	//every thread calculates AGG_SEC_10{min, max,avg}
 
 #ifdef DEBUG
-	printf("host address device min: %p, max: %p, avg: %p\n", d_aggr_min, d_aggr_max, d_aggr_avg);
+//	printf("host address device min: %p, max: %p, avg: %p\n", d_aggr_min, d_aggr_max, d_aggr_avg);
 	printf("threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, sharedSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
 #endif
-	agg_10s_1m<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
+	agg_kernel_1<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
+	//wywołanie kernela zbierającego dane z niezależnych bloków (zatem mamy tylko jeden blok)
+//	threadsPerBlock = blocksPerGrid;
+//	blocksPerGrid = 1;
+//	cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;
+//	agg_kernel_2<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
+	checkCudaErrors(cudaMemcpy(h_aggr_min, d_aggr_min, aggHeapSize, cudaMemcpyDeviceToHost));
+//	printf("\nskopiowalem aggr min aggHeapCount: %d\n", aggHeapCount);
+	checkCudaErrors(cudaMemcpy(h_aggr_max, d_aggr_max, aggHeapSize, cudaMemcpyDeviceToHost));
+//	printf("\nskopiowalem aggr max\n");
+	checkCudaErrors(cudaMemcpy(h_aggr_avg, d_aggr_avg, aggHeapSize, cudaMemcpyDeviceToHost));
+//	printf("\nskopiowalem aggr avg\n");
+	for (int i = 0; i < aggHeapCount; i++) {
+		printf("\nmin[%d]=%f", i, h_aggr_min[i]);
+//		printf("\nmax[%d]=%f", i, h_aggr_max[i]);
+//		printf("\navg[%d]=%f", i, h_aggr_avg[i]);
+	}
 	cudaFree(d_samples);
 	cudaFree(d_aggr_min);
 	cudaFree(d_aggr_max);
 	cudaFree(d_aggr_avg);
 	cudaDeviceReset();
 	printf("\n\n------------------ END ------------------\n");
-
+	free(h_samples);
+	free(h_aggr_min);
+	free(h_aggr_max);
+	free(h_aggr_avg);
 }
 int main(int argc, char **argv) {
-//	int size = 30 * 10 * 1000;
-//	printf("offset of 10s: %d\n", getAggOffset(size, AGG_SEC_10));
-//	printf("offset of 1m: %d\n", getAggOffset(size, AGG_MIN));
-//	printf("offset of 10m: %d\n", getAggOffset(size, AGG_MIN_10));
-//	printf("offset of 30m: %d\n", getAggOffset(size, AGG_MIN_30));
-//	printf("offset of 1h: %d\n", getAggOffset(size, AGG_HOUR));
-//	printf("offset of 24h: %d\n", getAggOffset(size, AGG_HOUR_24));
-//	printf("offset of year: %d\n", getAggOffset(size, AGG_YEAR));
-//	printf("offset of all: %d\n", getAggOffset(size, AGG_ALL));
-
+//	int size = 20;
+//	;
+//	printf("offset of 1: %d\n", getAggOffset(size, AGG_TEST_1));
+//	printf("offset of 3: %d\n", getAggOffset(size, AGG_TEST_3));
+//	printf("offset of 6: %d\n", getAggOffset(size, AGG_TEST_6));
+//	printf("offset of 18: %d\n", getAggOffset(size, AGG_TEST_18));
+//	printf("offset of 36: %d\n", getAggOffset(size, AGG_TEST_36));
+//	printf("offset of 108: %d\n", getAggOffset(size, AGG_TEST_108));
+//	printf("heap count: %d\n", getAggOffset(size, AGG_ALL));
+#ifdef TEST
+	process("Test_data.txt", argc, argv);
+#else
 	process("data/Osoba_concat.txt", argc, argv);
+#endif
 	CHECK_LAUNCH_ERROR()
 				;
 }

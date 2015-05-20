@@ -44,6 +44,7 @@ float* ReadFile(const char* name, int* count) {
 
 	return goodArray;
 }
+
 void testIO() {
 	int count;
 	float* buffer = ReadFile("data/Osoba_concat.txt", &count);
@@ -74,4 +75,11 @@ void initCuda(int argc, char ** argv) {
 
 }
 
-
+double mclock() {
+	struct timeval tp;
+	double sec, usec;
+	gettimeofday(&tp, NULL);
+	sec = double(tp.tv_sec);
+	usec = double(tp.tv_usec) / 1E6;
+	return sec + usec;
+}

@@ -28,4 +28,9 @@ do {                                                                  \
         exit(EXIT_FAILURE);                                           \
     }                                                                 \
 } while (0)
+
+double mclock();
+
+#define NEXT_ARRAY(array, size) &(array[size])
+
 #endif /* UTILS_H_ */
