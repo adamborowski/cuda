@@ -59,10 +59,15 @@ __device__ void device_count_aggregation(const int stepSize, AggrPointers input,
 }
 
 /*
- * @param bufferOffset - dodatkowa zmienna oznaczająca offset buforów wejściowych - przydatne gdy mamy
- * pamięć globalną i shared, wtedy offset jest inaczej liczony
- * @param outputSpec wskaźniki na tablice w shared memory
- * @param globalSpec wskaźniki na bufory wynikowe w pamięci globalnej
+ * Przygotowuje i wykonuje algorytm agregacji dla danego wątka w bloku
+ * @param numSamples ile sampli jest w programie
+ * @param inputIsGlobal definiuje czy indeks ma być obliczny z uwzględnieniem odrębnej czy wspólnej pamięci
+ * @param startingAggType jakiej agregacji odpowiada jeden wątek w bloku (każdy kernel inaczej tworzy bloki stąd to rozróżnienie przy obliczaniu indeksów)
+ * @param inputAggType z jakiej agregacji liczmy nową
+ * @param outputAggType jaką agregację liczymy
+ * @param inputSpec wskaźniki danych wejściowych
+ * @param sharedOutput wskaźniki do pamięci shared dla danych wyjściowych
+ * @param globalOutput wskaźniki do stert globalnych dla danych wyjściowych
  */
 __device__ void device_aggregate(
 		int numSamples, bool inputIsGlobal, int startingAggType,
@@ -78,7 +83,7 @@ __device__ void device_aggregate(
 	int mappedChunkIndex = mapThreadToGlobalChunkIndex(outputAggType / startingAggType);
 
 	int realChunkSize = 0;
-	if (mappedChunkIndex != BAD_CHUNK) {	//nasz wątek w bloku ma co robić (nie chodzi o wyrównanie danych tylko o to że w każdym bloku agregacje są liczone tylko z bloków
+	if (mappedChunkIndex != BAD_CHUNK) {	//nasz wątek w bloku ma co robić (nie chodzi o wyrównanie danych tylko o to że w każdym bloku agregacje są liczone tylko z bloków, więc mogą występować dziury
 		//TODO zamiast inputIsGlobal dostarczać do funkcji przesunięte wskaźniki (shared vs global)
 		if (inputIsGlobal) {	//wiemy, że jest to odczyt z pamięci globalnej
 			inputChunkIndex = mappedChunkIndex;	//każdy wątek bierze z globalnej tablicy swój chunk
@@ -86,27 +91,25 @@ __device__ void device_aggregate(
 			inputChunkIndex = threadLocalId;	//każdy wątek w bloku bierze swój chunk z tablicy shared w tym bloku
 		}
 		inputIndex = inputChunkIndex * chunkSize;	//wskazanie na pierwszy element chunku
-		int numInputElements = divceil(numSamples, inputAggType);	//ile w ogóle jest elementów do zagregowania
-		realChunkSize = getChunkSize(numInputElements, chunkSize, mappedChunkIndex);
+		int numInputElements = divceil(numSamples, inputAggType);	//ile w ogóle jest elementów do zagregowania globalnie
+		realChunkSize = getChunkSize(numInputElements, chunkSize, mappedChunkIndex);	//ile jest elementów do zagregowania dla tego wątku (uwzgl. padding)
 	}
 
 	if (realChunkSize > 0) { //jeśli wątek ma co robić
 		printf("\n%3d->%-3d inputIndex: %4d thread [%3d.%-3d] chunkSize: %d->%d mappedChunk: %d", inputAggType, outputAggType, inputIndex, blockIdx.x, threadIdx.x, chunkSize, realChunkSize, mappedChunkIndex);
 		AggrPointers inputPointers = { &inputSpec->min[inputIndex], &inputSpec->max[inputIndex], &inputSpec->avg[inputIndex] };
 		device_count_aggregation(realChunkSize, inputPointers, &aggResult);
-		//also write to global memory as a result of AGG_10s
-		int outputOffset = getAggOffset(numSamples, outputAggType); //we got offset to write 10s aggreations
-		int globalPtr = outputOffset + mappedChunkIndex; //gdzie nasza próbka wyląduje w globalu?
+		int outputOffset = getAggOffset(numSamples, outputAggType); //offset na stercie dla tego typu agregacji
+		int globalPtr = outputOffset + mappedChunkIndex; //gdzie nasza próbka wyląduje na stercie globalnej?
 		//XXX prawdopodobnie zapis do pamięci globalnej spowoduje że te wątki zostaną
-		//XXX zserializowane i inne w tym czasie sie policzą
+		//XXX zserializowane i inne w tym czasie sie policzą, zatem tutaj jest pewna optymalizacja wykonana
 		globalOutput->min[globalPtr] = aggResult.min;
 		globalOutput->max[globalPtr] = aggResult.max;
 		globalOutput->avg[globalPtr] = aggResult.avg;
 	}
-	__syncthreads(); //poczekaj aż każdy odczyta bufor
+	__syncthreads(); //poczekaj aż nikt nie będzie potrzebował shared memory
 	if (realChunkSize > 0) { //wątek miał co liczyć?
 		//teraz już każdy ma swój aggResult, pora zacząć (jak wiemy...) nadpisywać cache :)
-//		printf("\n________________ %f", aggResult.min);
 		sharedOutput->min[threadLocalId] = aggResult.min;
 		sharedOutput->max[threadLocalId] = aggResult.max;
 		sharedOutput->avg[threadLocalId] = aggResult.avg;

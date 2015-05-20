@@ -11,6 +11,11 @@
 float* ReadFile(const char* name, int* count);
 void testIO();
 void initCuda(int argc, char ** argv);
+
+double mclock();
+
+#define NEXT_ARRAY(array, size) &(array[size])
+
 #define CHECK_LAUNCH_ERROR()                                          \
 do {                                                                  \
     /* Check synchronous errors, i.e. pre-launch */                   \
@@ -28,9 +33,5 @@ do {                                                                  \
         exit(EXIT_FAILURE);                                           \
     }                                                                 \
 } while (0)
-
-double mclock();
-
-#define NEXT_ARRAY(array, size) &(array[size])
 
 #endif /* UTILS_H_ */
