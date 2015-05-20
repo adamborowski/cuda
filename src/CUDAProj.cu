@@ -53,7 +53,7 @@ void process(const char* name, int argc, char **argv) {
 	checkCudaErrors(cudaMemcpy(d_samples, h_samples, numSamples * sizeof(float), cudaMemcpyHostToDevice));
 
 //	int threadsPerBlock = 512;
-	int threadsPerBlock = AGG_TEST_108;	//TODO zoptymalizować ( AGG_TEST_18/AGG_TEST_3 )
+	int threadsPerBlock = AGG_TEST_18;	//TODO zoptymalizować ( AGG_TEST_18/AGG_TEST_3 )
 //tworzymy tyle wątków ile potrzeba do policzenia najmniejszej agregacji
 	int blocksPerGrid = divceil(getAggCount(numSamples, AGG_SAMPLE), threadsPerBlock);
 	int cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;	//every thread calculates AGG_SEC_10{min, max,avg}
@@ -64,10 +64,10 @@ void process(const char* name, int argc, char **argv) {
 #endif
 	agg_kernel_1<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
 	//wywołanie kernela zbierającego dane z niezależnych bloków (zatem mamy tylko jeden blok)
-//	threadsPerBlock = blocksPerGrid;
-//	blocksPerGrid = 1;
-//	cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;
-//	agg_kernel_2<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
+	threadsPerBlock = blocksPerGrid;
+	blocksPerGrid = 1;
+	cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;
+	agg_kernel_2<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
 	checkCudaErrors(cudaMemcpy(h_aggr_min, d_aggr_min, aggHeapSize, cudaMemcpyDeviceToHost));
 //	printf("\nskopiowalem aggr min aggHeapCount: %d\n", aggHeapCount);
 	checkCudaErrors(cudaMemcpy(h_aggr_max, d_aggr_max, aggHeapSize, cudaMemcpyDeviceToHost));
@@ -101,7 +101,8 @@ int main(int argc, char **argv) {
 //	printf("offset of 108: %d\n", getAggOffset(size, AGG_TEST_108));
 //	printf("heap count: %d\n", getAggOffset(size, AGG_ALL));
 #ifdef TEST
-	process("Test_data.txt", argc, argv);
+//	process("Test_data.txt", argc, argv);
+	process("data/Osoba_cut.txt", argc, argv);
 #else
 	process("data/Osoba_concat.txt", argc, argv);
 #endif

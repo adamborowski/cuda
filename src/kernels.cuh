@@ -40,8 +40,6 @@ __global__ void agg_kernel_1(int numSamples, float* samples, int cacheSize, floa
 	device_aggregate(numSamples, true, startingAggType, AGG_TEST_1, AGG_TEST_3, &globalInput, &sharedOutput, &globalOutput);
 	device_aggregate(numSamples, false, startingAggType, AGG_TEST_3, AGG_TEST_6, &sharedInput, &sharedOutput, &globalOutput);
 	device_aggregate(numSamples, false, startingAggType, AGG_TEST_6, AGG_TEST_18, &sharedInput, &sharedOutput, &globalOutput);
-	device_aggregate(numSamples, false, startingAggType, AGG_TEST_18, AGG_TEST_36, &sharedInput, &sharedOutput, &globalOutput);
-	device_aggregate(numSamples, false, startingAggType, AGG_TEST_36, AGG_TEST_108, &sharedInput, &sharedOutput, &globalOutput);
 	if (globalID == 0) {
 		printf("\n>>>>>> krenel ended <<<<<<<");
 	}
@@ -63,16 +61,25 @@ __global__ void agg_kernel_2(int numSamples, int cacheSize, float * d_aggr_min, 
 	float* s_avg = NEXT_ARRAY(s_max, threadsPerBlock);
 	cleanArray(threadsPerBlock * NUM_AGGREGATORS, shared);
 
+	/*
+	 * Uwaga! aby kontynuować działanie z poprzedniego kernela skopiować
+	 * ostatni wynik!!
+	 * Trzeba zastanowić się którą częćś i jakiej
+	 */
+
+	//odnajdź offset ostatniej agregacji w pamięci globalnej, jest jedna pamięć shared bo jeden blok
+	int offset = getAggOffset(numSamples, AGG_TEST_18);
+
 	//
-	AggrPointers globalInput = { d_aggr_min, d_aggr_max, d_aggr_avg };
+	AggrPointers globalInput = { &d_aggr_min[offset], &d_aggr_max[offset], &d_aggr_avg[offset] };
 	AggrPointers sharedInput = { s_min, s_max, s_avg };
-	AggrPointers globalOutput = globalInput;
+	AggrPointers globalOutput = { d_aggr_min, d_aggr_max, d_aggr_avg };
 	AggrPointers sharedOutput = sharedInput;
 
 	int startingAggType = AGG_TEST_18;
 
-	//pierwsze musi pójść z globalu
-	device_aggregate(numSamples, true, startingAggType, AGG_TEST_18, AGG_TEST_36, &globalInput, &sharedOutput, &globalOutput);
+	//pierwsze musi pójść z globalu ale ma udawać shared - czyli uwzględnić offset
+	device_aggregate(numSamples, false, startingAggType, AGG_TEST_18, AGG_TEST_36, &globalInput, &sharedOutput, &globalOutput);
 	device_aggregate(numSamples, false, startingAggType, AGG_TEST_36, AGG_TEST_108, &sharedInput, &sharedOutput, &globalOutput);
 	if (globalID == 0) {
 		printf("\n>>>>>> krenel ended <<<<<<<");

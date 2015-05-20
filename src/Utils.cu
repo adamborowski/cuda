@@ -32,9 +32,17 @@ float* ReadFile(const char* name, int* count) {
 	//Read file contents into buffer
 	char line[1024];
 	int _count = 0;
+
+	float testMin = INFINITY;
+
 	while (fgets(line, 1024, file)) {
-		sscanf(line, "%*s %f", &buffer[_count++]);
+		sscanf(line, "%*s %f", &buffer[_count]);
+		if (buffer[_count] < testMin) {
+			testMin = buffer[_count];
+		}
+		_count++;
 	}
+	printf("\n~~~~~~~~~~~~~~ TEST MIN: %f ~~~~~~~~~~~~~~\n", testMin);
 	float* goodArray = (float*) malloc(sizeof(float) * _count);
 	memcpy(goodArray, buffer, _count * sizeof(float));
 	*count = _count;

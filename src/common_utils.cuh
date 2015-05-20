@@ -159,11 +159,11 @@ __device__ int getChunkSize(const int numItems, const int chunkSize, const int c
  * >>> zaokr.dol(blockDim.x,maxKernelAgg)/aggType - czyli uwzględniając maksymalną agregację do policzenia w kernelu
  */
 __device__ int mapThreadToGlobalChunkIndex(int aggType) {
-	int chunksPerBlock = blockDim.x / aggType;
+	int chunksPerBlock = divceil(blockDim.x , aggType);
 	//ile tego typu danych mamy w bloku?
 	if (threadIdx.x >= chunksPerBlock) {
 		//ten wątek nie ma już co liczyć w tym bloku
-		return -1;
+		return BAD_CHUNK;
 	}
 	return chunksPerBlock * blockIdx.x + threadIdx.x;
 }
