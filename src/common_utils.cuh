@@ -4,7 +4,7 @@
  *  Created on: 19-05-2015
  *      Author: adam
  */
-
+#include <stdio.h>
 #ifndef COMMON_UTILS_CUH_
 #define COMMON_UTILS_CUH_
 
@@ -94,7 +94,7 @@ __host__ __device__ int getAggOffset(const int numSamples, const int aggType) {
 	return offset;
 }
 
-__device__ int getWiderAggr(int aggr) {
+__device__ __host__ int getWiderAggr(int aggr) {
 #ifdef TEST
 	switch(aggr) {
 		case AGG_SAMPLE: return AGG_TEST_3;
@@ -167,5 +167,25 @@ __device__ int mapThreadToGlobalChunkIndex(int aggType) {
 	}
 	return chunksPerBlock * blockIdx.x + threadIdx.x;
 }
+
+
+void printHeap(const int size, float* heap) {
+	int prevAggType = AGG_SAMPLE;
+	int currentAggType = getWiderAggr(prevAggType);
+	while (currentAggType != AGG_ALL) {
+		printf("\n    %d->%d", prevAggType, currentAggType);
+		int aggOffset = getAggOffset(size, currentAggType);
+		int nextOffset = getAggOffset(size, getWiderAggr(currentAggType));
+		int count = nextOffset - aggOffset;
+		for (int i = 0; i < count; i++) {
+			printf("\n\t\t[%d] = % 3.6f", i, heap[aggOffset + i]);
+		}
+		//
+		prevAggType=currentAggType;
+		currentAggType = getWiderAggr(currentAggType);
+	}
+	printf("\n-------------------------------------------");
+}
+
 
 #endif /* COMMON_UTILS_CUH_ */

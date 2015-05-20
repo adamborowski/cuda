@@ -77,11 +77,9 @@ __device__ void device_aggregate(
 
 	int mappedChunkIndex = mapThreadToGlobalChunkIndex(outputAggType / startingAggType);
 
-	if (inputAggType >= 18) {
-		printf("\n%d->%d thread [%d,%d] mappedChunkIndex: %d", inputAggType, outputAggType, blockIdx.x, threadIdx.x, mappedChunkIndex);
-	}
 	int realChunkSize = 0;
 	if (mappedChunkIndex != BAD_CHUNK) {	//nasz wątek w bloku ma co robić (nie chodzi o wyrównanie danych tylko o to że w każdym bloku agregacje są liczone tylko z bloków
+		//TODO zamiast inputIsGlobal dostarczać do funkcji przesunięte wskaźniki (shared vs global)
 		if (inputIsGlobal) {	//wiemy, że jest to odczyt z pamięci globalnej
 			inputChunkIndex = mappedChunkIndex;	//każdy wątek bierze z globalnej tablicy swój chunk
 		} else {	//wiemy że jest to odczyt z pamięci shared
@@ -93,7 +91,7 @@ __device__ void device_aggregate(
 	}
 
 	if (realChunkSize > 0) { //jeśli wątek ma co robić
-		printf("\n%d->%d inputindex: %d, thread [%d.%d], chunkSize: %d (real %d). mapped chunk: %d", inputAggType, outputAggType, inputIndex, blockIdx.x, threadIdx.x, chunkSize, realChunkSize, mappedChunkIndex);
+		printf("\n%3d->%-3d inputIndex: %4d thread [%3d.%-3d] chunkSize: %d->%d mappedChunk: %d", inputAggType, outputAggType, inputIndex, blockIdx.x, threadIdx.x, chunkSize, realChunkSize, mappedChunkIndex);
 		AggrPointers inputPointers = { &inputSpec->min[inputIndex], &inputSpec->max[inputIndex], &inputSpec->avg[inputIndex] };
 		device_count_aggregation(realChunkSize, inputPointers, &aggResult);
 		//also write to global memory as a result of AGG_10s

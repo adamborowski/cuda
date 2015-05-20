@@ -1,6 +1,6 @@
-
 #include "Utils.h"
 #include "CudaProj.h"
+#include "common_utils.cuh"
 // includes, system
 
 #include <stdlib.h>
@@ -74,11 +74,7 @@ void process(const char* name, int argc, char **argv) {
 //	printf("\nskopiowalem aggr max\n");
 	checkCudaErrors(cudaMemcpy(h_aggr_avg, d_aggr_avg, aggHeapSize, cudaMemcpyDeviceToHost));
 //	printf("\nskopiowalem aggr avg\n");
-	for (int i = 0; i < aggHeapCount; i++) {
-		printf("\nmin[%d]=%f", i, h_aggr_min[i]);
-//		printf("\nmax[%d]=%f", i, h_aggr_max[i]);
-//		printf("\navg[%d]=%f", i, h_aggr_avg[i]);
-	}
+	printHeap(numSamples, h_aggr_min);
 	cudaFree(d_samples);
 	cudaFree(d_aggr_min);
 	cudaFree(d_aggr_max);

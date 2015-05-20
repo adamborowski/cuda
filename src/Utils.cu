@@ -1,4 +1,5 @@
 #include "Utils.h"
+#include "CudaProj.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <helper_functions.h>  // helper for shared functions common to CUDA SDK samples
