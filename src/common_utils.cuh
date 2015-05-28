@@ -188,4 +188,5 @@ void printHeap(const int size, float* heap) {
 }
 
 
+
 #endif /* COMMON_UTILS_CUH_ */

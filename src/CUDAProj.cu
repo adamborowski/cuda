@@ -1,4 +1,4 @@
-#include "Utils.h"
+#include "utils.h"
 #include "CudaProj.h"
 #include "common_utils.cuh"
 // includes, system
@@ -87,7 +87,8 @@ void process(const char* name, int argc, char **argv) {
 int main(int argc, char **argv) {
 #ifdef TEST
 	process("Test_data.txt", argc, argv);
-//	process("data/Osoba_cut.txt", argc, argv);
+//		process("data/Osoba_cut.txt", argc, argv);
+//	process("data/Osoba_1row.txt", argc, argv);
 #else
 	process("data/Osoba_concat.txt", argc, argv);
 #endif

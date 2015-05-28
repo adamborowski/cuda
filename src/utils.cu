@@ -1,4 +1,4 @@
-#include "Utils.h"
+#include "utils.h"
 #include "CudaProj.h"
 #include <stdlib.h>
 #include <stdio.h>

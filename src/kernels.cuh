@@ -5,7 +5,7 @@
  *      Author: adam
  */
 
-#include "Utils.h"
+#include "utils.h"
 #include "CudaProj.h"
 #include "device_aggregator.cuh"
 #include "common_utils.cuh"
