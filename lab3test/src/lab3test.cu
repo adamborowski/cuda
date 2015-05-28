@@ -1,0 +1,647 @@
+//zadanie 3 do wykonania
+/*
+ * Copyright 1993-2013 NVIDIA Corporation.  All rights reserved.
+ *
+ * Please refer to the NVIDIA end user license agreement (EULA) associated
+ * with this source code for terms and conditions that govern your use of
+ * this software. Any use, reproduction, disclosure, or distribution of
+ * this software and related documentation outside the terms of the EULA
+ * is strictly prohibited.
+ *
+ */
+
+/*
+ * This sample implements a conjugate graident solver on GPU
+ * using CUBLAS and CUSPARSE
+ *
+ */
+
+// includes, system
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+/* Using updated (v2) interfaces to cublas and cusparse */
+#include <cuda_runtime.h>
+#include <cusparse_v2.h>
+#include <cublas_v2.h>
+
+// Utilities and system includes
+#include <helper_functions.h>  // helper for shared functions common to CUDA SDK samples
+#include <helper_cuda.h>       // helper function CUDA error checking and intialization
+const char *sSDKname = "conjugateGradient";
+
+double mclock() {
+	struct timeval tp;
+
+	double sec, usec;
+	gettimeofday(&tp, NULL);
+	sec = double(tp.tv_sec);
+	usec = double(tp.tv_usec) / 1E6;
+	return sec + usec;
+}
+
+#define dot_BS     32
+#define kernel_BS  32
+
+/* genTridiag: generate a random tridiagonal symmetric matrix */
+void genTridiag(int *I, int *J, float *val, int N, int nz) {
+	double RAND_MAXi = 1e6;
+	double val_r = 12.345 * 1e5;
+
+	I[0] = 0, J[0] = 0, J[1] = 1;
+	val[0] = (float) val_r / RAND_MAXi + 10.0f;
+	val[1] = (float) val_r / RAND_MAXi;
+	int start;
+
+	for (int i = 1; i < N; i++) {
+		if (i > 1) {
+			I[i] = I[i - 1] + 3;
+		} else {
+			I[1] = 2;
+		}
+
+		start = (i - 1) * 3 + 2;
+		J[start] = i - 1;
+		J[start + 1] = i;
+
+		if (i < N - 1) {
+			J[start + 2] = i + 1;
+		}
+
+		val[start] = val[start - 1];
+		val[start + 1] = (float) val_r / RAND_MAXi + 10.0f;
+
+		if (i < N - 1) {
+			val[start + 2] = (float) val_r / RAND_MAXi;
+		}
+	}
+
+	I[N] = nz;
+}
+
+void cgs_basic(int argc, char **argv, int N, int M) {
+
+	//int M = 0, N = 0,
+	int nz = 0, *I = NULL, *J = NULL;
+	float *val = NULL;
+	const float tol = 1e-10f;
+	const int max_iter = 1000;
+	float *x;
+	float *rhs;
+	float a, b, na, r0, r1;
+	int *d_col, *d_row;
+	float *d_val, *d_x, dot;
+	float *d_r, *d_p, *d_Ax;
+	float *res;
+	int k;
+	float alpha, beta, alpham1;
+
+	// This will pick the best possible CUDA capable device
+	cudaDeviceProp deviceProp;
+	int devID = findCudaDevice(argc, (const char **) argv);
+
+	if (devID < 0) {
+		printf("exiting...\n");
+		exit(EXIT_SUCCESS);
+	}
+
+	checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
+
+	// Statistics about the GPU device
+	printf("> GPU device has %d Multi-Processors, SM %d.%d compute capabilities\n\n", deviceProp.multiProcessorCount, deviceProp.major, deviceProp.minor);
+
+	int version = (deviceProp.major * 0x10 + deviceProp.minor);
+
+	if (version < 0x11) {
+		printf("%s: requires a minimum CUDA compute 1.1 capability\n", sSDKname);
+		cudaDeviceReset();
+		exit(EXIT_SUCCESS);
+	}
+
+	/* Generate a random tridiagonal symmetric matrix in CSR format */
+	//M = N = 32*64;//10; //1048576;
+	printf("M = %d, N = %d\n", M, N);
+	nz = (N - 2) * 3 + 4;
+	I = (int *) malloc(sizeof(int) * (N + 1));
+	J = (int *) malloc(sizeof(int) * nz);
+	val = (float *) malloc(sizeof(float) * nz);
+	genTridiag(I, J, val, N, nz);
+
+	/*
+	 for (int i = 0; i < nz; i++){
+	 printf("%d\t", J[i]);
+	 }
+	 printf("\n");
+	 for (int i = 0; i < nz; i++){
+	 printf("%2f\t", val[i]);
+	 }
+	 */
+
+	x = (float *) malloc(sizeof(float) * N);
+	rhs = (float *) malloc(sizeof(float) * N);
+
+	for (int i = 0; i < N; i++) {
+		rhs[i] = 1.0;
+		x[i] = 0.0;
+	}
+
+	/* Get handle to the CUBLAS context */
+	cublasHandle_t cublasHandle = 0;
+	cublasStatus_t cublasStatus;
+	cublasStatus = cublasCreate(&cublasHandle);
+
+	checkCudaErrors(cublasStatus);
+
+	/* Get handle to the CUSPARSE context */
+	cusparseHandle_t cusparseHandle = 0;
+	cusparseStatus_t cusparseStatus;
+	cusparseStatus = cusparseCreate(&cusparseHandle);
+
+	checkCudaErrors(cusparseStatus);
+
+	cusparseMatDescr_t descr = 0;
+	cusparseStatus = cusparseCreateMatDescr(&descr);
+
+	checkCudaErrors(cusparseStatus);
+
+	cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
+	cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
+
+	checkCudaErrors(cudaMalloc((void ** ) &d_col, nz * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_row, (N + 1) * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_val, nz * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_x, N * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_r, N * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_p, N * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_Ax, N * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &res, 1 * sizeof(float)));
+
+	cudaMemcpy(d_col, J, nz * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_row, I, (N + 1) * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_val, val, nz * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_x, x, N * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_r, rhs, N * sizeof(float), cudaMemcpyHostToDevice);
+
+	alpha = 1.0;
+	alpham1 = -1.0;
+	beta = 0.0;
+	r0 = 0.;
+
+	double t_start = mclock();
+	cusparseScsrmv(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, N, N, nz, &alpha, descr, d_val, d_row, d_col, d_x, &beta, d_Ax);
+
+	cublasSaxpy(cublasHandle, N, &alpham1, d_Ax, 1, d_r, 1); // PODMIEN FUNCKJE (I)
+	cublasStatus = cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1); // PODMIEN FUNCKJE (II)
+
+	k = 1;
+
+	while (r1 > tol * tol && k <= max_iter) {
+		if (k > 1) {
+			b = r1 / r0;
+			cublasStatus = cublasSscal(cublasHandle, N, &b, d_p, 1); // PODMIEN FUNCKJE (I)
+			cublasStatus = cublasSaxpy(cublasHandle, N, &alpha, d_r, 1, d_p, 1); // PODMIEN FUNCKJE (I)
+		} else {
+			cublasStatus = cublasScopy(cublasHandle, N, d_r, 1, d_p, 1); // PODMIEN FUNCKJE (I)
+		}
+
+		cusparseScsrmv(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, N, N, nz, &alpha, descr, d_val, d_row, d_col, d_p, &beta, d_Ax); // PODMIEN FUNCKJE (III)
+		cublasStatus = cublasSdot(cublasHandle, N, d_p, 1, d_Ax, 1, &dot); // PODMIEN FUNCKJE (II)
+		a = r1 / dot;
+
+		cublasStatus = cublasSaxpy(cublasHandle, N, &a, d_p, 1, d_x, 1); // PODMIEN FUNCKJE (I)
+		na = -a;
+		cublasStatus = cublasSaxpy(cublasHandle, N, &na, d_Ax, 1, d_r, 1); // PODMIEN FUNCKJE (I)
+
+		r0 = r1;
+		cublasStatus = cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1); // PODMIEN FUNCKJE (II)
+		cudaThreadSynchronize();
+		printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
+		k++;
+	}
+	printf("TIME OF CGS_BASIC = %f\n", mclock() - t_start);
+
+	cudaMemcpy(x, d_x, N * sizeof(float), cudaMemcpyDeviceToHost);
+
+	float rsum, diff, err = 0.0;
+
+	for (int i = 0; i < N; i++) {
+		rsum = 0.0;
+
+		for (int j = I[i]; j < I[i + 1]; j++) {
+			rsum += val[j] * x[J[j]];
+		}
+
+		diff = fabs(rsum - rhs[i]);
+
+		if (diff > err) {
+			err = diff;
+		}
+	}
+
+	cusparseDestroy(cusparseHandle);
+	cublasDestroy(cublasHandle);
+
+	free(I);
+	free(J);
+	free(val);
+	free(x);
+	free(rhs);
+	cudaFree(d_col);
+	cudaFree(d_row);
+	cudaFree(d_val);
+	cudaFree(d_x);
+	cudaFree(d_r);
+	cudaFree(d_p);
+	cudaFree(d_Ax);
+
+	cudaDeviceReset();
+
+	printf("Test Summary:  Error amount = %e\n", err);
+	//exit((k <= max_iter) ? 0 : 1);
+
+}
+
+__global__ void myScopy(int n, const float *x, int incx, float *y, int incy) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	if (i < n) {
+		y[i] = x[i];
+	}
+}
+
+__global__ void
+
+mySscal(int n, float a, float *x, int incx) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	if (i < n) {
+		x[i] = a * x[i];
+	}
+}
+
+__global__ void
+
+mySaxpy(int n, float a, const float *x, int incrx, float *y, int incry) {
+
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	if (i < n) {
+		y[i] = y[i] + a * x[i];
+	}
+}
+
+//
+
+__global__ void //cusparseScsrmv(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, N, N, nz, &alpha, descr, d_val, d_row, d_col, d_x, &beta, d_Ax)
+myScsrmv(int m, int n, const float *csrValA, const int *csrRowPtrA, const int *csrColIndA, const float *x, float *y) {
+
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	if (i < n) {
+		int j;
+		float sub = 0.0;
+		for (j = csrRowPtrA[i]; j < csrRowPtrA[i + 1]; j++) {
+			sub += csrValA[j] * x[csrColIndA[j]];
+		}
+		y[i] = sub;
+	}
+
+}
+
+
+//__global__ void printArray(int n, const float *x) {
+//	printf("# array [%d]\n", n);
+//	for (int i = 0; i < n; i++) {
+//		printf("\t[%d] = %f\n", i, x[i]);
+//	}
+//}
+
+__global__ void dot1(int N, const float *a, const float *b, float *partialSum) {
+
+	//tutaj odpala się kilka wątków w jednym bloku<<
+	extern __shared__ float c_shared[];
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int localI = threadIdx.x;
+	int globalI = blockIdx.x;
+	//wymnazanie
+	if (i < N) {
+		c_shared[localI] = a[i] * b[i];
+//		printf("c_shared[localI %d]=%f * %f\n", i, a[i], b[i]);
+	}
+
+	int leftPtr, rightPtr;
+	int blockN = blockDim.x;
+	//jeśli jest to ostatni block, to ma on mniej lub tyle samo jeśli jest całkowita wielokrotność
+	if (blockIdx.x == gridDim.x - 1)
+		blockN = N % blockN;
+	if (blockN == 0)
+		blockN = N;
+//	printf("block %d blockN %d", blockIdx.x, blockN);
+	//poniżej nie N tylko ilość thread in block
+
+	for (int skip = 1; skip < blockN; skip <<= 1) {
+		__syncthreads();
+
+		if (i < N) { //suma czesciowa
+			leftPtr = localI * skip * 2;
+			rightPtr = leftPtr + skip;
+			if (rightPtr < blockN) {
+//				printf(">>DOT1 %d.%d skip: %d, %d+%d, %.0f+%.0f\n", blockIdx.x, threadIdx.x, skip, leftPtr, rightPtr, c_shared[leftPtr], c_shared[rightPtr]);
+				c_shared[leftPtr] += c_shared[rightPtr];
+			}
+		}
+
+	}
+
+//    __syncthreads();//nie trzeba syncrhonizować, wątek 0 ma wszystko co potrzeba
+	if (localI == 0 && i < N) {
+		partialSum[globalI] = c_shared[0];
+//		printf("part %d = %f\n", globalI, partialSum[globalI]);
+	}
+//    printf("****************** DOT1 finish i=%d, ", i);
+}
+
+/**
+ * Poniższa funkcja robi redukcję a wynik zostaje w pierwszym elemencie
+ * musi być wykonana w jednym bloku, jeśli wątków będzie za mało, trzeba w pętli wykonać jakieś machlojstwo
+ */__global__ void dot2(int vectorSize, float *partialSum, int numBlocks) {
+//    printf(">>DOT2\n");
+	extern __shared__ float c_shared[];
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	//cache:
+//    printf("to shared i=%d: %f", i, partialSum[i]);
+	if (i < numBlocks) {
+//		printf("to shared i=%d: %f\n", i, partialSum[i]);
+		c_shared[i] = partialSum[i];
+	}
+
+	int numParts = numBlocks;
+	if (numParts > vectorSize)
+		numParts = vectorSize;
+	int localI = i;
+	int skip;
+	int leftPtr, rightPtr;
+
+	for (skip = 1; skip < numParts; skip <<= 1) {
+		__syncthreads();
+		if (i < numParts) { //suma czesciowa
+			leftPtr = localI * skip * 2;
+			rightPtr = leftPtr + skip;
+			if (rightPtr < numParts) {
+//				printf(">>DOT1 %d.%d skip: %d, %d+%d\n", blockIdx.x, threadIdx.x, skip, leftPtr, rightPtr);
+				c_shared[leftPtr] += c_shared[rightPtr];
+			}
+		}
+	}
+
+//    __syncthreads();//wątek zerowy zapisuje już do c_shared[0] dlatego nie trzeba synchronizować
+//    printf("i: %d %f\n", i, c_shared[0]);
+	if (i == 0) {
+		partialSum[0] = c_shared[0];
+//		printf("DOT2: %f\n", partialSum[0]);
+	}
+
+}
+
+void myCublasSdot(int N, const float *d_vec1, const float *d_vec2, float *h_result) {
+//	printf("------ invoking myCublasSdot ------\n");
+	float *d_partialSum;
+	int threadsPerBlock = 256;
+	int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+	int partialSumSize = blocksPerGrid * sizeof(float);
+	int numUsedBlocks = ceil(N / (float) threadsPerBlock);
+	//
+	//utworzenie miejsca na GPU dla danych wejściowych
+	checkCudaErrors(cudaMalloc((void ** ) &d_partialSum, partialSumSize));
+	//wywołanie kernela1
+	dot1<<<blocksPerGrid, threadsPerBlock, threadsPerBlock * sizeof(float)>>>(N, d_vec1, d_vec2, d_partialSum);
+	int threadsPerBlock2 = blocksPerGrid;
+//    printf("blocksPergrid2: %d", threadsPerBlock2);
+	dot2<<<1, threadsPerBlock2, numUsedBlocks * sizeof(float)>>>(N, d_partialSum, numUsedBlocks);
+	//pobranie z GPU sumy głównej
+	cudaMemcpy(h_result, d_partialSum, sizeof(float), cudaMemcpyDeviceToHost);
+//	printf("result: %f\n", *h_result);
+//	printf("blocksPerGrid: %d, threadsPerBlock:%d, threadsPerBlock2: %d\n", blocksPerGrid, threadsPerBlock,threadsPerBlock2);
+	cudaFree(d_partialSum);
+}
+
+void cgs_TODO(int argc, char **argv, int N, int M) {
+
+	int nz = 0, *I = NULL, *J = NULL;
+	float *val = NULL;
+	const float tol = 1e-10f;
+	const int max_iter = 10;	//TODO było 1000
+	float *x;
+	float *rhs;
+	float a, b, na, r0, r1;
+	int *d_col, *d_row;
+	float *d_val, *d_x, dot;
+	float *d_r, *d_p, *d_Ax;
+	int k;
+	float alpha, alpham1;
+
+	// This will pick the best possible CUDA capable device
+	cudaDeviceProp deviceProp;
+	int devID = findCudaDevice(argc, (const char **) argv);
+
+	if (devID < 0) {
+		printf("exiting...\n");
+		exit(EXIT_SUCCESS);
+	}
+
+	checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
+
+	// Statistics about the GPU device
+	printf("> GPU device has %d Multi-Processors, SM %d.%d compute capabilities\n\n", deviceProp.multiProcessorCount, deviceProp.major, deviceProp.minor);
+
+	int version = (deviceProp.major * 0x10 + deviceProp.minor);
+
+	if (version < 0x11) {
+		printf("%s: requires a minimum CUDA compute 1.1 capability\n", sSDKname);
+		cudaDeviceReset();
+		exit(EXIT_SUCCESS);
+	}
+
+	/* Generate a random tridiagonal symmetric matrix in CSR format */
+	//M = N = 32*64;//10; //1048576;
+	printf("M = %d, N = %d\n", M, N);
+	nz = (N - 2) * 3 + 4;
+	I = (int *) malloc(sizeof(int) * (N + 1));
+	J = (int *) malloc(sizeof(int) * nz);
+	val = (float *) malloc(sizeof(float) * nz);
+	genTridiag(I, J, val, N, nz);
+
+	/*
+	 for (int i = 0; i < nz; i++){
+	 printf("%d\t", J[i]);
+	 }
+	 printf("\n");
+	 for (int i = 0; i < nz; i++){
+	 printf("%2f\t", val[i]);
+	 }
+	 */
+
+	x = (float *) malloc(sizeof(float) * N);
+	rhs = (float *) malloc(sizeof(float) * N);
+
+	for (int i = 0; i < N; i++) {
+		rhs[i] = 1.0;
+		x[i] = 0.0;
+	}
+
+	/* Get handle to the CUBLAS context */
+	cublasHandle_t cublasHandle = 0;
+	cublasStatus_t cublasStatus;
+	cublasStatus = cublasCreate(&cublasHandle);
+
+	checkCudaErrors(cublasStatus);
+
+	/* Get handle to the CUSPARSE context */
+	cusparseHandle_t cusparseHandle = 0;
+	cusparseStatus_t cusparseStatus;
+	cusparseStatus = cusparseCreate(&cusparseHandle);
+
+	checkCudaErrors(cusparseStatus);
+
+	cusparseMatDescr_t descr = 0;
+	cusparseStatus = cusparseCreateMatDescr(&descr);
+
+	checkCudaErrors(cusparseStatus);
+
+	cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
+	cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
+
+	checkCudaErrors(cudaMalloc((void ** ) &d_col, nz * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_row, (N + 1) * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_val, nz * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_x, N * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_r, N * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_p, N * sizeof(float)));
+	checkCudaErrors(cudaMalloc((void ** ) &d_Ax, N * sizeof(float)));
+
+	cudaMemcpy(d_col, J, nz * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_row, I, (N + 1) * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_val, val, nz * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_x, x, N * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_r, rhs, N * sizeof(float), cudaMemcpyHostToDevice);
+
+	alpha = 1.0;
+	alpham1 = -1.0;
+	r0 = 0.;
+
+	int threadsPerBlock = 256;
+//    int threadsPerBlock = 32;
+	int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+
+	// sparse matrix vector product: d_Ax = A * d_x
+	//cusparseScsrmv(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, N, N, nz, &alpha, descr, d_val, d_row, d_col, d_x, &beta, d_Ax); // PODMIEN FUNCKJE (ZADANIE-I)
+	myScsrmv<<<blocksPerGrid, threadsPerBlock>>>(N, N, d_val, d_row, d_col, d_x, d_Ax); // PODMIEN FUNCKJE (ZADANIE-I)
+
+	//azpy: d_r = d_r + alpham1 * d_Ax
+	//cublasSaxpy(cublasHandle, N, &alpham1, d_Ax, 1, d_r, 1); // PODMIEN FUNCKJE (ZADANIE-I)
+	mySaxpy<<<blocksPerGrid, threadsPerBlock>>>(N, alpham1, d_Ax, 1, d_r, 1); // PODMIEN FUNCKJE (ZADANIE-I)
+
+	//dot:  r1 = d_r * d_r
+//    cublasStatus = cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1); // PODMIEN FUNCKJE (ZADANIE-III)
+	myCublasSdot(N, d_r, d_r, &r1); // PODMIEN FUNCKJE (ZADANIE-III)
+//	printf("r1 is: %f\n", r1);
+	k = 1;
+
+	printf("**************** while loop ****************\n");
+
+	while (r1 > tol * tol && k <= max_iter) {
+
+		if (k > 1) {
+			b = r1 / r0;
+			//scal: d_p = b * d_p
+			//            cublasStatus = cublasSscal(cublasHandle, N, &b, d_p, 1); // PODMIEN FUNCKJE (ZADANIE-I) @OK
+			mySscal<<<blocksPerGrid, threadsPerBlock>>>(N, b, d_p, 1); // PODMIEN FUNCKJE (ZADANIE-I)
+			//axpy:  d_p = d_p + alpha * d_r
+			//            cublasStatus = cublasSaxpy(cublasHandle, N, &alpha, d_r, 1, d_p, 1); // PODMIEN FUNCKJE (ZADANIE-I)
+			mySaxpy<<<blocksPerGrid, threadsPerBlock>>>(N, alpha, d_r, 1, d_p, 1);
+		} else {
+			//cpy: d_p = d_r
+			//            cublasStatus = cublasScopy(cublasHandle, N, d_r, 1, d_p, 1); // PODMIEN FUNCKJE (ZADANIE-I) @OK
+			myScopy<<<blocksPerGrid, threadsPerBlock>>>(N, d_r, 1, d_p, 1);
+		}
+
+		//sparse matrix-vector product: d_Ax = A * d_p
+		//        cusparseScsrmv(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, N, N, nz, &alpha, descr, d_val, d_row, d_col, d_p, &beta, d_Ax); // PODMIEN FUNCKJE (ZADANIE-II)
+		myScsrmv<<<blocksPerGrid, threadsPerBlock>>>(N, N, d_val, d_row, d_col, d_p, d_Ax); // PODMIEN FUNCKJE (ZADANIE-II)
+
+//		printArray<<<1,1,0>>>(N, d_p);
+//		cublasStatus = cublasSdot(cublasHandle, N, d_p, 1, d_Ax, 1, &dot); // PODMIEN FUNCKJE (ZADANIE-III)
+		myCublasSdot(N, d_p, d_Ax, &dot); // PODMIEN FUNCKJE (ZADANIE-III)
+//		printArray<<<1,1,0>>>(N, d_p);
+//		printf("dot for k=%d is: %f\n", k, dot);
+
+		a = r1 / dot;
+
+		//axpy: d_x = d_x + a*d_p
+		//        cublasStatus = cublasSaxpy(cublasHandle, N, &a, d_p, 1, d_x, 1); // PODMIEN FUNCKJE (ZADANIE-I)
+		mySaxpy<<<blocksPerGrid, threadsPerBlock>>>(N, a, d_p, 1, d_x, 1);
+		na = -a;
+
+		//axpy:  d_r = d_r + na * d_Ax
+		//        cublasStatus = cublasSaxpy(cublasHandle, N, &na, d_Ax, 1, d_r, 1); // PODMIEN FUNCKJE (ZADANIE-I) @OK
+		mySaxpy<<<blocksPerGrid, threadsPerBlock>>>(N, na, d_Ax, 1, d_r, 1);
+		r0 = r1;
+
+		//dot: r1 = d_r * d_r
+		//		cublasStatus = cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1); // PODMIEN FUNCKJE (ZADANIE-III)
+		myCublasSdot(N, d_r, d_r, &r1); // PODMIEN FUNCKJE (ZADANIE-III)
+		cudaThreadSynchronize();
+		printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
+		k++;
+	}
+
+	cudaMemcpy(x, d_x, N * sizeof(float), cudaMemcpyDeviceToHost);
+
+	float rsum, diff, err = 0.0;
+
+	for (int i = 0; i < N; i++) {
+		rsum = 0.0;
+
+		for (int j = I[i]; j < I[i + 1]; j++) {
+			rsum += val[j] * x[J[j]];
+		}
+
+		diff = fabs(rsum - rhs[i]);
+
+		if (diff > err) {
+			err = diff;
+		}
+	}
+
+	cusparseDestroy(cusparseHandle);
+	cublasDestroy(cublasHandle);
+
+	free(I);
+	free(J);
+	free(val);
+	free(x);
+	free(rhs);
+	cudaFree(d_col);
+	cudaFree(d_row);
+	cudaFree(d_val);
+	cudaFree(d_x);
+	cudaFree(d_r);
+	cudaFree(d_p);
+	cudaFree(d_Ax);
+
+	cudaDeviceReset();
+
+	printf("Test Summary:  Error amount = %e\n", err);
+	//exit((k <= max_iter) ? 0 : 1);
+
+}
+;
+
+int main(int argc, char **argv) {
+	//int N = 1e6;//1 << 20;
+	//int N = 256 * (1<<10)  -10 ; //1e6;//1 << 20;
+	//granica 1023-1024-1
+	int N = 1e5;
+	int M = N;
+
+//    cgs_basic(argc, argv, N, M);
+
+	cgs_TODO(argc, argv, N, M);
+}
