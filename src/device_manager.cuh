@@ -9,6 +9,7 @@
 #define DEVICE_MANAGER_CUH_
 #include "settings.h"
 #include "CudaProj.h"
+#include "common_utils.cuh"
 struct BlockState {
 	/*
 	 * Podział pracy nad strumieniem:
@@ -30,34 +31,26 @@ struct BlockState {
 
 __device__ void setupBlockState(BlockState *state, int numSamples) {
 	const int threadsPerBlock = blockDim.x;
-	int numCountThreads = blockDim.x / (1 + GROUP_RATIO); //jeśli mamy 10 wątków to A=3 B=4 C=3
-	if (numCountThreads == 0) {
-		numCountThreads = 1;
-	}
-	int numMemThreads = (blockDim.x - numCountThreads) / 2;
-	if (numMemThreads == 0) {
-		numMemThreads = 1;
-	}
-	else if (numMemThreads > 32) {
-		numMemThreads = (numCountThreads / 32) * 32;
-		numCountThreads = blockDim.x - 2 * numMemThreads;
-	}
+	int numCountThreads = threadsPerBlock - (SETTINGS_GROUP_A_SIZE + SETTINGS_GROUP_C_SIZE); //jeśli mamy 10 wątków to A=3 B=4 C=3
 	//
 	state->numSamples = numSamples;
 	//
-	state->num_A_threads = numMemThreads;
-	state->num_B_threads = threadsPerBlock - 2 * numMemThreads;
-	state->num_C_threads = numMemThreads;
+	state->num_A_threads = SETTINGS_GROUP_A_SIZE;
+	state->num_B_threads = numCountThreads;
+	state->num_C_threads = SETTINGS_GROUP_C_SIZE;
 
 	state->partReadIndex = blockIdx.x * state->num_B_threads; //w pierwszej fazie trzeba ustawić na prawidłowy indeks pierwszej paczki dla bloku
 	state->partAggIndex = -1; //w pierwszej fazie nie ma czego liczyć
 	state->partWriteIndex = -1; //w pierwszej fazie nie  ma czego odsyłać do global
 	//
 	state->partSize = AGG_TEST_108;
+
 	state->numParts = divceil(numSamples, state->partSize);
-	state->numPartsPerBlock = divceil(state->numParts, blockDim.x);
+
+	state->numPartsPerBlock = divceil(state->numParts, gridDim.x);
+
 }
-__device__ void updateBlockState(int i, numSamples, BlockState* state) {
+__device__ void updateBlockState(int i, const int numSamples, BlockState* state) {
 	//od jakiej paczki ma zacząć wczytywanie blok (zrobią to równolegle wątki A)
 	int partIndexForBlock = state->num_B_threads * (i * blockDim.x + blockIdx.x);
 
@@ -84,13 +77,14 @@ __device__ void thread_A_iter(int i, const int localId, const BlockState *state)
 	//ile elementów ma skopiować pojedyczny wątek grupy A? Tyle będzie iteracji?
 	const int numElementsToCopyByThread = divceil(numElementsToCopyByBlock, numCopyingThreads);
 	//wsaźnik elementu w iteracji
-	const int elementIndex;
-
-	for (int i = 0; i < numElementsToCopyByThread; i++) {
-		elementIndex = numCopyingThreads * i + localId;
-		pritnf("\nT:[%d %d] A:%d i:%d", blockIdx.x, threadIdx.x, localId, i);
-		__syncthreads();
-	}
+	int elementIndex;
+	tlog("num b threads: %d", state->num_B_threads);
+//
+//	for (int i = 0; i < numElementsToCopyByThread; i++) {
+//		elementIndex = numCopyingThreads * i + localId;
+//		printf("\nT:[%d %d] A:%d i:%d", blockIdx.x, threadIdx.x, localId, i);
+//		__syncthreads();
+//	}
 
 }
 __device__ void thread_B_iter(const int i, const int localId, BlockState *state) {
@@ -100,14 +94,15 @@ __device__ void thread_C_iter(const int i, const int localId, BlockState *state)
 
 }
 
-__global__ void kernel_manager(int numSamples, float *samples, AggrPointers *outPointers) {
-	extern __shared__ void shared[];
+__global__ void kernel_manager(int numSamples, const float *samples, AggrPointers *outPointers) {
+	extern __shared__ float shared[];
 	BlockState *state = (BlockState*) shared;
-	const int blockIndex = blockIdx.x;
 
 	if (threadIdx.x == 0) { //zainicjalizujmy stan
-		setupBlockState(state);
+		setupBlockState(state, numSamples);
 	}
+
+	__syncthreads();
 
 //wątki są przydzielone do grup w kolejności A, C, B
 	const int firstThreadInCGroupIndex = state->num_A_threads;
@@ -121,15 +116,15 @@ __global__ void kernel_manager(int numSamples, float *samples, AggrPointers *out
 		if (localId_B >= 0) { //jest to wątek typu B
 
 		}
-		else if (localID_C >= 0) { //to jest wątek typu C
+		else if (localId_C >= 0) { //to jest wątek typu C
 
 		}
 		else { //wątek typu A
-			thread_A_iter(i, localId_A, block);
+			thread_A_iter(i, localId_A, state);
 		}
 		__syncthreads();
 		if (threadIdx.x == 0) {
-			updateBlockState(i, state);
+			updateBlockState(i, numSamples, state);
 		}
 		__syncthreads();
 

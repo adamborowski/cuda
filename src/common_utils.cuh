@@ -5,6 +5,7 @@
  *      Author: adam
  */
 #include <stdio.h>
+
 #ifndef COMMON_UTILS_CUH_
 #define COMMON_UTILS_CUH_
 
@@ -159,7 +160,7 @@ __device__ int getChunkSize(const int numItems, const int chunkSize, const int c
  * >>> zaokr.dol(blockDim.x,maxKernelAgg)/aggType - czyli uwzględniając maksymalną agregację do policzenia w kernelu
  */
 __device__ int mapThreadToGlobalChunkIndex(int aggType) {
-	int chunksPerBlock = divceil(blockDim.x , aggType);
+	int chunksPerBlock = divceil(blockDim.x, aggType);
 	//ile tego typu danych mamy w bloku?
 	if (threadIdx.x >= chunksPerBlock) {
 		//ten wątek nie ma już co liczyć w tym bloku
@@ -167,7 +168,6 @@ __device__ int mapThreadToGlobalChunkIndex(int aggType) {
 	}
 	return chunksPerBlock * blockIdx.x + threadIdx.x;
 }
-
 
 void printHeap(const int size, float* heap) {
 	int prevAggType = AGG_SAMPLE;
@@ -181,12 +181,12 @@ void printHeap(const int size, float* heap) {
 			printf("\n\t\t[%d] = % 3.6f", i, heap[aggOffset + i]);
 		}
 		//
-		prevAggType=currentAggType;
+		prevAggType = currentAggType;
 		currentAggType = getWiderAggr(currentAggType);
 	}
 	printf("\n-------------------------------------------");
 }
 
-
-
+#define tlog(fmt, ...) printf("\n> %3d %-3d: " fmt, blockIdx.x, threadIdx.x, ##__VA_ARGS__)
+#define dbgi(symbol) tlog(#symbol ": %d", symbol)
 #endif /* COMMON_UTILS_CUH_ */

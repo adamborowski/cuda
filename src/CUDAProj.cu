@@ -14,6 +14,7 @@
 #include <helper_functions.h>  // helper for shared functions common to CUDA SDK samples
 #include <helper_cuda.h>       // helper function CUDA error checking and intialization
 #include "kernels.cuh"
+#include "device_manager.cuh"
 
 void process(const char* name, int argc, char **argv) {
 	//nowe deklaracje
@@ -34,9 +35,9 @@ void process(const char* name, int argc, char **argv) {
 	cleanArray(aggHeapCount, h_aggr_min);
 	cleanArray(aggHeapCount, h_aggr_max);
 	cleanArray(aggHeapCount, h_aggr_avg);
-	printf("numSamples = %d\n", numSamples);
-	printf("heapCount = %d\n", aggHeapCount);
-	printf("heapSize = %d\n", aggHeapSize);
+	printf("{HOST} numSamples = %d\n", numSamples);
+	printf("{HOST} heapCount = %d\n", aggHeapCount);
+	printf("{HOST} heapSize = %d\n", aggHeapSize);
 #endif
 //allocate memory on gpu
 	checkCudaErrors(cudaMalloc((void ** ) &d_samples, numSamples * sizeof(float)));	//todo zrobić cudaMalloc dla poszczególnych agregacji
@@ -52,19 +53,30 @@ void process(const char* name, int argc, char **argv) {
 	//transfer samples from cpu to gpu
 	checkCudaErrors(cudaMemcpy(d_samples, h_samples, numSamples * sizeof(float), cudaMemcpyHostToDevice));
 	//tworzymy tyle wątków ile potrzeba do policzenia najmniejszej agregacji
-	int threadsPerBlock = AGG_TEST_18;	//TODO zoptymalizować ( AGG_TEST_18/AGG_TEST_3 )
-	int blocksPerGrid = divceil(getAggCount(numSamples, AGG_SAMPLE), threadsPerBlock);
-	int cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;	//every thread calculates AGG_TEST_3{min, max,avg}
+	int threadsPerBlock = SETTINGS_GROUP_A_SIZE + SETTINGS_GROUP_B_SIZE + SETTINGS_GROUP_C_SIZE;
+	int blocksPerGrid = SETTINGS_NUM_BLOCKS;
+	int cacheSize = getAggOffset(SETTINGS_GROUP_B_SIZE * AGG_TEST_108, AGG_ALL) * sizeof(float) * NUM_AGGREGATORS + sizeof(BlockState);
 #ifdef DEBUG
 //	printf("host address device min: %p, max: %p, avg: %p\n", d_aggr_min, d_aggr_max, d_aggr_avg);
-	printf("threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, sharedSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
+	printf("{HOST} threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, sharedSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
 #endif
-	agg_kernel_1<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
-	//wywołanie kernela zbierającego dane z niezależnych bloków (zatem mamy tylko jeden blok)
-	threadsPerBlock = blocksPerGrid;
-	blocksPerGrid = 1;
-	cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;
-	agg_kernel_2<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
+
+	AggrPointers output;
+	output.min = d_aggr_min;
+	output.max = d_aggr_max;
+	output.avg = d_aggr_avg;
+
+	kernel_manager<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, &output);	//todo sharedSize zmienic na nowy sposob liczenia
+	/*
+	 agg_kernel_1<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
+	 //wywołanie kernela zbierającego dane z niezależnych bloków (zatem mamy tylko jeden blok)
+	 threadsPerBlock = blocksPerGrid;
+	 blocksPerGrid = 1;
+	 cacheSize = threadsPerBlock * sizeof(float) * NUM_AGGREGATORS;
+	 agg_kernel_2<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
+
+	 */
+
 	checkCudaErrors(cudaMemcpy(h_aggr_min, d_aggr_min, aggHeapSize, cudaMemcpyDeviceToHost));
 	checkCudaErrors(cudaMemcpy(h_aggr_max, d_aggr_max, aggHeapSize, cudaMemcpyDeviceToHost));
 	checkCudaErrors(cudaMemcpy(h_aggr_avg, d_aggr_avg, aggHeapSize, cudaMemcpyDeviceToHost));
@@ -86,12 +98,13 @@ void process(const char* name, int argc, char **argv) {
 }
 int main(int argc, char **argv) {
 #ifdef TEST
-	process("Test_data.txt", argc, argv);
-//		process("data/Osoba_cut.txt", argc, argv);
+//	process("Test_data.txt", argc, argv);
+	process("data/Osoba_2000linii.txt", argc, argv);
 //	process("data/Osoba_1row.txt", argc, argv);
 #else
 	process("data/Osoba_concat.txt", argc, argv);
 #endif
 	CHECK_LAUNCH_ERROR()
 				;
+	printf("\n\nprocess ended.");
 }

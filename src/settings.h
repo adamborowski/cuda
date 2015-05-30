@@ -10,7 +10,9 @@
 
 #define TEST
 #define DEBUG
-#define GROUP_RATIO 2 //ma być 2 x więcej wątków A+C niż B
-
+#define SETTINGS_GROUP_A_SIZE 32
+#define SETTINGS_GROUP_B_SIZE 10
+#define SETTINGS_GROUP_C_SIZE 32
+#define SETTINGS_NUM_BLOCKS 2
 
 #endif /* SETTINGS_H_ */
