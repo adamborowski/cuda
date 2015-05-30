@@ -8,6 +8,7 @@
 #ifndef DEVICE_MANAGER_CUH_
 #define DEVICE_MANAGER_CUH_
 #include "settings.h"
+#include "utils.h"
 #include "CudaProj.h"
 #include "common_utils.cuh"
 struct BlockState {
@@ -28,10 +29,31 @@ struct BlockState {
 	int partSize;
 	int numSamples;
 	float * samples;
-	float *samplesCache;
-	int samplesCacheCount;
+	float *heapCacheAC; //cache sterty do wczytywania z global (A) i zapisu do global (C)
+	float *heapCacheB; //cache sterty do obliczeń przez wątki B
+	int heapCacheCount;
 	AggrPointers *outPointers;
 };
+/*
+ * @return ile bajtów zajmuje shared memory
+ */
+__device__ __host__ long initializeSharedMemory(BlockState *state) {
+	const int samplesCount = state->partSize * state->num_B_threads;
+	const int heapCount = getAggOffset(samplesCount, AGG_ALL);
+	//
+	float* movingPtr = (float*) state + sizeof(BlockState);
+	const int SIZE = sizeof(float);
+	//
+	state->heapCacheCount= heapCount;
+	//alokuj cache AC
+	state->heapCacheAC = movingPtr;
+	movingPtr += heapCount * SIZE;
+	//alokuj cache B
+	state->heapCacheB = movingPtr;
+	movingPtr += heapCount * SIZE;
+	//
+	return (long) movingPtr - (long) state;
+}
 
 __device__ void setupBlockState(BlockState *state, int numSamples, float *samples) {
 	const int threadsPerBlock = blockDim.x;
@@ -53,10 +75,8 @@ __device__ void setupBlockState(BlockState *state, int numSamples, float *sample
 
 	state->numPartsPerBlock = divceil(state->numParts, gridDim.x);
 
-	// cache setup
 	state->samples = samples;
-	state->samplesCache = (float*) state + sizeof(BlockState);	//cache dla wczytanych sampli są zaraz za BlockState
-	state->samplesCacheCount = state->partSize * state->num_B_threads;
+	initializeSharedMemory(state);
 
 }
 __device__ void updateBlockState(int i, const int numSamples, BlockState* state) {
@@ -67,6 +87,10 @@ __device__ void updateBlockState(int i, const int numSamples, BlockState* state)
 	state->firstCountPart = state->firstReadPart;
 	//grupa A wczytuje nowe paczki
 	state->firstReadPart += gridDim.x * state->num_B_threads;
+	//wymieniamy bufory sterty AC z B
+	float* tmp=state->heapCacheAC;
+	state->heapCacheAC=state->heapCacheB;
+	state->heapCacheB=tmp;
 
 }
 
@@ -99,10 +123,10 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 	for (int j = 0; j < numElementsToCopyByThread; j++) {
 		localElementIndex = j * numCopyingThreads + localId;
 		globalElementIndex = startingElement + localElementIndex;
-		//załaduj element z global do cache
-		state->samplesCache[localElementIndex] = state->samples[globalElementIndex];
+		//załaduj element z global do cache AC
+		state->heapCacheAC[localElementIndex] = state->samples[globalElementIndex];
 		if (localElementIndex < numElementsToCopyByBlock && globalElementIndex < numSamples) {
-			tlog("i: %d j:%d (%d -> %d) #%d %f=%f", i, j, globalElementIndex, localElementIndex, state->numSamples,state->samplesCache[localElementIndex], state->samples[globalElementIndex]);
+			tlog("i: %d j:%d (%d -> %d) #%d %f=%f", i, j, globalElementIndex, localElementIndex, state->numSamples, state->heapCacheAC[localElementIndex], state->samples[globalElementIndex]);
 		}
 
 		__syncthreads();

@@ -55,10 +55,15 @@ void process(const char* name, int argc, char **argv) {
 	//tworzymy tyle wątków ile potrzeba do policzenia najmniejszej agregacji
 	int threadsPerBlock = SETTINGS_GROUP_A_SIZE + SETTINGS_GROUP_B_SIZE + SETTINGS_GROUP_C_SIZE;
 	int blocksPerGrid = SETTINGS_NUM_BLOCKS;
-	int cacheSize = getAggOffset(SETTINGS_GROUP_B_SIZE * AGG_TEST_108, AGG_ALL) * sizeof(float) * NUM_AGGREGATORS + sizeof(BlockState);
+
+	//calculate cacheSize
+	BlockState bs;
+	bs.partSize = AGG_TEST_108;
+	bs.num_B_threads = SETTINGS_GROUP_B_SIZE;
+	int cacheSize = initializeSharedMemory(&bs);
 #ifdef DEBUG
 //	printf("host address device min: %p, max: %p, avg: %p\n", d_aggr_min, d_aggr_max, d_aggr_avg);
-	printf("{HOST} threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, sharedSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
+	printf("{HOST} threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, cacheSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
 #endif
 
 	AggrPointers output;
