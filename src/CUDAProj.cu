@@ -81,7 +81,7 @@ void process(const char* name, int argc, char **argv) {
 	checkCudaErrors(cudaMemcpy(h_aggr_max, d_aggr_max, aggHeapSize, cudaMemcpyDeviceToHost));
 	checkCudaErrors(cudaMemcpy(h_aggr_avg, d_aggr_avg, aggHeapSize, cudaMemcpyDeviceToHost));
 #ifdef DEBUG
-	printHeap(numSamples, h_aggr_min);
+//	printHeap(numSamples, h_aggr_min);
 #else
 	//TODO stdout binary output
 #endif

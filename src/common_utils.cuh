@@ -187,6 +187,13 @@ void printHeap(const int size, float* heap) {
 	printf("\n-------------------------------------------");
 }
 
-#define tlog(fmt, ...) printf("\n> %3d %-3d: " fmt, blockIdx.x, threadIdx.x, ##__VA_ARGS__)
+#define tsync(cmd) for(int _=0;_<blockDim.x;_++){\
+	if(_==threadIdx.x){\
+		cmd;\
+	}\
+	__syncthreads();\
+} __syncthreads();
+
+#define tlog(fmt, ...) printf("\n>%3d %-3d: " fmt, blockIdx.x, threadIdx.x, ##__VA_ARGS__)
 #define dbgi(symbol) tlog(#symbol ": %d", symbol)
 #endif /* COMMON_UTILS_CUH_ */
