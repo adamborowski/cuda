@@ -14,7 +14,7 @@
 
 #ifdef DEBUG
 
-#define test(tmp, out) if (*out!=tmp) printf("\nFailed to write by threadId = %d.\t%f!=%f. &out = %p.", threadIdx.x, *out, tmp, out);
+#define test(tmp, out) if (*out!=tmp && !isnan(tmp)) printf("\nFailed to write by threadId = %d.\t%f!=%f. &out = %p.", threadIdx.x, *out, tmp, out);
 #else
 #define test(localId, tmp, out)
 #endif

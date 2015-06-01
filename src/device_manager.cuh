@@ -125,19 +125,9 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 __device__ void thread_B_aggregate(const int localId, const int inputAggr, const int outputAggr, const BlockState *state) {
 	//skoro masz obliczyć jakąś agregację na pewnym zakresie, oblicz zakres wejściowy
 	//indeks początkowy w pamięci shared to heapOffset(inputAggr)+ileInputPozeraWatek
-	int numInputElements = state->partSize / inputAggr;	//ile w bloku mamy bloków wejściowych
-	int numOutputElements = state->partSize / outputAggr;
+	const int numInputElements = state->partSize / inputAggr;	//ile w bloku mamy bloków wejściowych
+	const int numOutputElements = state->partSize / outputAggr;
 	const int aggChunkSize = outputAggr / inputAggr;	//ile elementów jest agregowanych w jedno
-
-	//tutaj należy sprawdzić, czy na pewno tyle będzie elementów (align problem)
-	const int globalAggIndex = state->firstCountPart * state->partSize / outputAggr;
-	const int globalAggCount = getAggCount(state->numSamples, outputAggr);
-	if (globalAggIndex + numOutputElements >= globalAggCount) {
-		const int no = numOutputElements, ni = numInputElements;
-		numOutputElements = globalAggCount - globalAggIndex;
-		numInputElements = numOutputElements * aggChunkSize;
-		tlog("%d>=%d --> in: %d out: %d bylo: in: %d out: %d", globalAggIndex + no, globalAggCount, numInputElements, numOutputElements, ni, no);
-	}
 	const int inputOffset = getHeapOffset(state->heapCacheSamplesCount, inputAggr) + localId * numInputElements;
 	const int outputOffset = getHeapOffset(state->heapCacheSamplesCount, outputAggr) + localId * numOutputElements;
 	AggrPointers input;
@@ -147,11 +137,6 @@ __device__ void thread_B_aggregate(const int localId, const int inputAggr, const
 		input.max = input.min;	//TODO uproszczenie
 		input.avg = input.min;	//TODO uproszczenie
 		//todo dodać realChunkSize
-
-
-
-
-
 		device_count_aggregation(aggChunkSize, input, &output);
 		state->heapCacheB[outputOffset + i] = output.min;
 	}
