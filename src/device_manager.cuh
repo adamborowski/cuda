@@ -32,6 +32,7 @@ struct BlockState {
 	float *heapCacheAC; //cache sterty do wczytywania z global (A) i zapisu do global (C)
 	float *heapCacheB; //cache sterty do obliczeń przez wątki B
 	int heapCacheCount;
+	int heapCacheSamplesCount;
 	AggrPointers *outPointers;
 };
 /*
@@ -44,7 +45,8 @@ __device__ __host__ long initializeSharedMemory(BlockState *state) {
 	float* movingPtr = (float*) state + sizeof(BlockState);
 	const int SIZE = sizeof(float);
 	//
-	state->heapCacheCount= heapCount;
+	state->heapCacheCount = heapCount;
+	state->heapCacheSamplesCount = samplesCount;
 	//alokuj cache AC
 	state->heapCacheAC = movingPtr;
 	movingPtr += heapCount * SIZE;
@@ -88,9 +90,9 @@ __device__ void updateBlockState(int i, const int numSamples, BlockState* state)
 	//grupa A wczytuje nowe paczki
 	state->firstReadPart += gridDim.x * state->num_B_threads;
 	//wymieniamy bufory sterty AC z B
-	float* tmp=state->heapCacheAC;
-	state->heapCacheAC=state->heapCacheB;
-	state->heapCacheB=tmp;
+	float* tmp = state->heapCacheAC;
+	state->heapCacheAC = state->heapCacheB;
+	state->heapCacheB = tmp;
 
 }
 
@@ -114,26 +116,71 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 	//wsaźnik elementu w iteracji
 	int globalElementIndex, localElementIndex;
 
-//w tej iteracji grupa A w bloku kopiuje ileś partii
+	//w tej iteracji grupa A w bloku kopiuje ileś partii
 	const int startingPart = state->firstReadPart;
 	const int startingElement = startingPart * state->partSize;
 	const int numSamples = state->numSamples;
-	tsync(if(localId==0)tlog("iter %d, starting part %d el %d",i, startingPart, startingElement));
-	dbgi(numElementsToCopyByThread);
+	if (localId == 0)
+		tlog("A: iter %d, starting part %d el %d", i, startingPart, startingElement);
+//	dbgi(numElementsToCopyByThread);
+	cleanArray(getHeapOffset(numElementsToCopyByBlock, AGG_ALL), state->heapCacheAC);
 	for (int j = 0; j < numElementsToCopyByThread; j++) {
 		localElementIndex = j * numCopyingThreads + localId;
 		globalElementIndex = startingElement + localElementIndex;
 		//załaduj element z global do cache AC
-		state->heapCacheAC[localElementIndex] = state->samples[globalElementIndex];
 		if (localElementIndex < numElementsToCopyByBlock && globalElementIndex < numSamples) {
-			tlog("i: %d j:%d (%d -> %d) #%d %f=%f", i, j, globalElementIndex, localElementIndex, state->numSamples, state->heapCacheAC[localElementIndex], state->samples[globalElementIndex]);
+//			state->heapCacheAC[localElementIndex] = state->samples[globalElementIndex];
+			state->heapCacheAC[localElementIndex] = globalElementIndex;	//Test
+//			tlog("i: %d j:%d (%d -> %d) #%d %f=%f", i, j, globalElementIndex, localElementIndex, state->numSamples, state->heapCacheAC[localElementIndex], state->samples[globalElementIndex]);
 		}
 
-		__syncthreads();
 	}
+//	if(blockIdx.x==0 && threadIdx.x==0 && i==0){
+//		printHeap(state->heapCacheSamplesCount, state->heapCacheAC);
+//	}
 
 }
-__device__ void thread_B_iter(const int i, const int localId, BlockState *state) {
+/*
+ * Wykonuje agregację dla zakresu elementów
+ * zapewnia obliczenie poprawnego elementu wejściowego i wyjściowego sterty (w zależności od nr wątku)
+ */
+__device__ void thread_B_aggregate(const int inputAggr, const int outputAggr, const BlockState *state){
+
+}
+__device__ void thread_B_iter(const int i, const int numIterations, const int localId, const BlockState *state) {
+	if (localId == 0)
+		tlog("B: iter %d", i);
+
+	/*
+	 * w tym wątku bierzemy jeden part i robimy dla niego agregacje i wysyłamy pod wskazany adres
+	 * adres wyznaczamy: getHeapOffset(agg)+localId*getAggCount(partSize, aggr)
+	 */
+	const int myNumSamples = state->partSize;
+	AggrPointers input;
+	AggrValues output;
+	const int inputAggr = AGG_SAMPLE;
+	const int outputAggr = AGG_TEST_3;
+	const int stepSize = outputAggr / inputAggr;	//z ilu elementów robi się agregację?
+	const int numInputElementsPerThread = getAggCount(myNumSamples, inputAggr); //ile elementów pożera jeden wątek?
+	const int numOutputElementsPerThread = getAggCount(myNumSamples, outputAggr); //ile elementów wypluwa jeden wątek?
+	const int sharedHeapInputOffset = getHeapOffset(state->heapCacheSamplesCount, inputAggr);
+	const int sharedHeapOutputOffset = getHeapOffset(state->heapCacheSamplesCount, outputAggr);
+	const int myInputOffset = sharedHeapInputOffset + localId * numInputElementsPerThread;
+	const int myOutputOffset = sharedHeapOutputOffset + localId * numOutputElementsPerThread;
+	//XXX założenie - tylko MIN (jak będzie działać, doda się max i avg)
+
+	//iteracja 1 -> 3
+	const int numOutputChunks = getAggCount(myNumSamples, outputAggr);
+	tlog("localId: %d, %d -> %d", localId, myInputOffset, myOutputOffset);
+	for (int j = 0; j < numOutputChunks; j++) {
+		input.min = &state->heapCacheB[myInputOffset + j * stepSize];
+		input.max = &state->heapCacheB[myInputOffset + j * stepSize];
+		input.avg = &state->heapCacheB[myInputOffset + j * stepSize];
+		device_count_aggregation(stepSize, input, &output);
+		state->heapCacheB[myOutputOffset + i] = output.min;
+	}
+	//TODO teraz w heapie będą się minimzalizowały indeksy dlatego widać że działa skoro AGG_3 wyliczył z (0,1,2)->0, (3,4,5)->3 i wygląda tak: 0,3,6,9,...
+	tlog("B-> cacheAC: %p", state->heapCacheB);
 
 }
 __device__ void thread_C_iter(const int i, const int localId, BlockState *state) {
@@ -150,7 +197,7 @@ __global__ void kernel_manager(int numSamples, float *samples, AggrPointers *out
 
 //wątki są przydzielone do grup w kolejności A, C, B
 	const int firstThreadInCGroupIndex = state->num_A_threads;
-	const int firstThreadInBGroupIndex = firstThreadInCGroupIndex + state->num_B_threads;
+	const int firstThreadInBGroupIndex = state->num_A_threads + state->num_C_threads;
 	const int localId_A = threadIdx.x;
 	const int localId_C = threadIdx.x - firstThreadInCGroupIndex;
 	const int localId_B = threadIdx.x - firstThreadInBGroupIndex;
@@ -163,16 +210,21 @@ __global__ void kernel_manager(int numSamples, float *samples, AggrPointers *out
 			thread_A_iter(i, numIterations, localId_A, state);
 		}
 		if (threadIsB && i > 0 && i + 1 < numIterations) { //jest to wątek typu B
-
+			thread_B_iter(i, numIterations, localId_B, state);
 		}
 		else if (threadIsC && i > 1) { //to jest wątek typu C
 
 		}
 		__syncthreads();
+		if (threadIdx.x == 0 && i > 0) {
+			printHeap(state->heapCacheSamplesCount, state->heapCacheB);
+		}
 		if (threadIdx.x == 0) {
 			updateBlockState(i, numSamples, state);
 		}
 		__syncthreads();
+		if (i == 1)
+			break; //FIXME REMOVE
 
 	}
 

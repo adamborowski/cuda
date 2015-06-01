@@ -94,6 +94,15 @@ __host__ __device__ int getAggOffset(const int numSamples, const int aggType) {
 #endif
 	return offset;
 }
+/*
+ * Zwraca offest na całej stercie włącznie z samplami
+ */
+__device__ __host__ int getHeapOffset(const int numSamples, const int aggr) {
+	if (aggr == AGG_SAMPLE) {
+		return 0;
+	}
+	return getAggOffset(numSamples, aggr) + numSamples;
+}
 
 __device__ __host__ int getWiderAggr(int aggr) {
 #ifdef TEST
@@ -169,14 +178,38 @@ __device__ int mapThreadToGlobalChunkIndex(int aggType) {
 	return chunksPerBlock * blockIdx.x + threadIdx.x;
 }
 
-void printHeap(const int size, float* heap) {
+__device__ __host__ void printAggHeap(const int size, float* heap) {
 	int prevAggType = AGG_SAMPLE;
 	int currentAggType = getWiderAggr(prevAggType);
 	while (currentAggType != AGG_ALL) {
-		printf("\n    %d->%d", prevAggType, currentAggType);
+
 		int aggOffset = getAggOffset(size, currentAggType);
 		int nextOffset = getAggOffset(size, getWiderAggr(currentAggType));
 		int count = nextOffset - aggOffset;
+		printf("\n    %d->%d (%d)", prevAggType, currentAggType, count);
+		for (int i = 0; i < count; i++) {
+			printf("\n\t\t[%d] = % 3.6f", i, heap[aggOffset + i]);
+		}
+		//
+		prevAggType = currentAggType;
+		currentAggType = getWiderAggr(currentAggType);
+	}
+	printf("\n-------------------------------------------");
+}
+
+__device__ __host__ void printHeap(const int numSamples, float* heap) {
+	int prevAggType = AGG_SAMPLE;
+	int currentAggType = getWiderAggr(prevAggType);
+	printf("\n    samples (%d)", numSamples);
+	for (int i = 0; i < numSamples; i++) {
+		printf("\n\t\t[%d] = % 3.6f", i, heap[i]);
+	}
+	while (currentAggType != AGG_ALL) {
+
+		int aggOffset = getHeapOffset(numSamples, currentAggType);
+		int nextOffset = getHeapOffset(numSamples, getWiderAggr(currentAggType));
+		int count = nextOffset - aggOffset;
+		printf("\n    %d->%d (%d)", prevAggType, currentAggType, count);
 		for (int i = 0; i < count; i++) {
 			printf("\n\t\t[%d] = % 3.6f", i, heap[aggOffset + i]);
 		}
