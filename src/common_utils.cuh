@@ -17,6 +17,7 @@ __host__ __device__ void cleanArray(int count, float* array) {
 	for (int i = 0; i < count; i++)
 		array[i] = NAN;
 }
+
 /**
  * Calculates aggregation count for specified data size
  */
@@ -219,13 +220,28 @@ __device__ __host__ void printHeap(const int numSamples, float* heap) {
 	}
 	printf("\n-------------------------------------------");
 }
-
+//TODO unsafe if used not for all blocks
 #define tsync(cmd) for(int _=0;_<blockDim.x;_++){\
 	if(_==threadIdx.x){\
 		cmd;\
 	}\
 	__syncthreads();\
 } __syncthreads();
+/*
+ * Wykonuje kopiowanie równoległe tablicy wykorzystując memory coalesing
+ * Nie wszystkie wątki w bloku muszą brać udział w kopiowaniu, dlatego stosuje się odwzorowanie id wątków na localThreadId
+ * @param localThreadId - zmapowany z threadIdx identyfikator wątku.
+ * @param numThreads - liczba wątków biorących udział w kopiowaniu
+ */
+__device__ void parallelCopy(const int localThreadId, const int numThreads, const int numElements, float* src, float* dst) {
+	const int numElementsPerThread = divceil(numElements, numThreads);
+	for (int i = 0; i < numElementsPerThread; i++) {
+		const int index = i * numThreads + localThreadId;
+		if (index < numElements) {
+			dst[index] = src[index];
+		}
+	}
+}
 
 #define tlog(fmt, ...) printf("\n>%3d %-3d: " fmt, blockIdx.x, threadIdx.x, ##__VA_ARGS__)
 #define dbgi(symbol) tlog(#symbol ": %d", symbol)
