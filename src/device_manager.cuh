@@ -33,7 +33,7 @@ struct BlockState {
 	float *heapCacheB; //cache sterty do obliczeń przez wątki B
 	int heapCacheCount;
 	int heapCacheSamplesCount;
-	AggrPointers *outPointers;
+	AggrPointers outPointers;
 };
 /*
  * @return ile bajtów zajmuje shared memory
@@ -57,7 +57,7 @@ __device__ __host__ long initializeSharedMemory(BlockState *state) {
 	return (long) movingPtr - (long) state;
 }
 
-__device__ void setupBlockState(BlockState *state, int numSamples, float *samples) {
+__device__ void setupBlockState(BlockState *state, int numSamples, float *samples, AggrPointers outPointers) {
 	const int threadsPerBlock = blockDim.x;
 	int numCountThreads = threadsPerBlock - (SETTINGS_GROUP_A_SIZE + SETTINGS_GROUP_C_SIZE); //jeśli mamy 10 wątków to A=3 B=4 C=3
 	//
@@ -78,6 +78,7 @@ __device__ void setupBlockState(BlockState *state, int numSamples, float *sample
 	state->numPartsPerBlock = divceil(state->numParts, gridDim.x);
 
 	state->samples = samples;
+	state->outPointers = outPointers;
 	initializeSharedMemory(state);
 
 }
@@ -101,16 +102,9 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 	 * TODO przenieść zmienne lokalne iteracji do struktury która by była definiowana raz przez init_thread_A
 	 * zrobić to na etap III
 	 */
-	/*
-	 * 0. ile partii trzeba przeczytać z global (w ramach grupy A)
-	 * 1. ile elementów tablicy trzeba skopiować w sumie?
-	 * 2. ile iteracji wymagać będzie skopiowanie
-	 * 3. w konkretnej iteracji jaki wątek jaki element ma skopiować?
-	 */
 	//ile elementów trzeba skopiować w bloku w jednej iteracji?
 	const int numElementsToCopyByBlock = state->num_B_threads * state->partSize;
 	//TODO numElementsToCopyByBlock musi uwzględnić że dla tego bloku jest mniej danych ze względu na wyrównanie
-	//ile wątków kopiuje?
 	const int numCopyingThreads = state->num_A_threads;
 	//w tej iteracji grupa A w bloku kopiuje ileś partii
 	const int startingElement = state->firstReadPart * state->partSize;
@@ -122,62 +116,82 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 
 	parallelCopy(
 			localId, numCopyingThreads, numElementsToCopyByBlock,
-			&state->samples[startingElement], state->heapCacheAC,
-			true);
+			&state->samples[startingElement], state->heapCacheAC);
 }
 /*
  * Wykonuje agregację dla zakresu elementów
  * zapewnia obliczenie poprawnego elementu wejściowego i wyjściowego sterty (w zależności od nr wątku)
  */
-__device__ void thread_B_aggregate(const int inputAggr, const int outputAggr, const BlockState *state) {
+__device__ void thread_B_aggregate(const int localId, const int inputAggr, const int outputAggr, const BlockState *state) {
+	//skoro masz obliczyć jakąś agregację na pewnym zakresie, oblicz zakres wejściowy
+	//indeks początkowy w pamięci shared to heapOffset(inputAggr)+ileInputPozeraWatek
+	int numInputElements = state->partSize / inputAggr;	//ile w bloku mamy bloków wejściowych
+	int numOutputElements = state->partSize / outputAggr;
+	const int aggChunkSize = outputAggr / inputAggr;	//ile elementów jest agregowanych w jedno
 
+	//tutaj należy sprawdzić, czy na pewno tyle będzie elementów (align problem)
+	const int globalAggIndex = state->firstCountPart * state->partSize / outputAggr;
+	const int globalAggCount = getAggCount(state->numSamples, outputAggr);
+	if (globalAggIndex + numOutputElements >= globalAggCount) {
+		const int no = numOutputElements, ni = numInputElements;
+		numOutputElements = globalAggCount - globalAggIndex;
+		numInputElements = numOutputElements * aggChunkSize;
+		tlog("%d>=%d --> in: %d out: %d bylo: in: %d out: %d", globalAggIndex + no, globalAggCount, numInputElements, numOutputElements, ni, no);
+	}
+	const int inputOffset = getHeapOffset(state->heapCacheSamplesCount, inputAggr) + localId * numInputElements;
+	const int outputOffset = getHeapOffset(state->heapCacheSamplesCount, outputAggr) + localId * numOutputElements;
+	AggrPointers input;
+	AggrValues output;
+	for (int i = 0; i < numOutputElements; i++) {
+		input.min = &state->heapCacheB[inputOffset + i * aggChunkSize];
+		input.max = input.min;	//TODO uproszczenie
+		input.avg = input.min;	//TODO uproszczenie
+		//todo dodać realChunkSize
+
+
+
+
+
+		device_count_aggregation(aggChunkSize, input, &output);
+		state->heapCacheB[outputOffset + i] = output.min;
+	}
 }
 __device__ void thread_B_iter(const int i, const int numIterations, const int localId, const BlockState *state) {
 	if (localId == 0)
 		tlog("B: iter %d", i);
 
-	/*
-	 * w tym wątku bierzemy jeden part i robimy dla niego agregacje i wysyłamy pod wskazany adres
-	 * adres wyznaczamy: getHeapOffset(agg)+localId*getAggCount(partSize, aggr)
-	 */
-	const int myNumSamples = state->partSize;
-	AggrPointers input;
-	AggrValues output;
-	const int inputAggr = AGG_SAMPLE;
-	const int outputAggr = AGG_TEST_3;
-	const int stepSize = outputAggr / inputAggr;	//z ilu elementów robi się agregację?
-	const int numInputElementsPerThread = getAggCount(myNumSamples, inputAggr); //ile elementów pożera jeden wątek?
-	const int numOutputElementsPerThread = getAggCount(myNumSamples, outputAggr); //ile elementów wypluwa jeden wątek?
-	const int sharedHeapInputOffset = getHeapOffset(state->heapCacheSamplesCount, inputAggr);
-	const int sharedHeapOutputOffset = getHeapOffset(state->heapCacheSamplesCount, outputAggr);
-	const int myInputOffset = sharedHeapInputOffset + localId * numInputElementsPerThread;
-	const int myOutputOffset = sharedHeapOutputOffset + localId * numOutputElementsPerThread;
-//XXX założenie - tylko MIN (jak będzie działać, doda się max i avg)
-
-//iteracja 1 -> 3
-	const int numOutputChunks = getAggCount(myNumSamples, outputAggr);
-	tlog("localId: %d, %d -> %d", localId, myInputOffset, myOutputOffset);
-
-	for (int j = 0; j < numOutputChunks; j++) {
-		input.min = &state->heapCacheB[myInputOffset + j * stepSize];
-		input.max = &state->heapCacheB[myInputOffset + j * stepSize];
-		input.avg = &state->heapCacheB[myInputOffset + j * stepSize];
-		device_count_aggregation(stepSize, input, &output);
-		state->heapCacheB[myOutputOffset + j] = output.min;
-	}
-//TODO teraz w heapie będą się minimzalizowały indeksy dlatego widać że działa skoro AGG_3 wyliczył z (0,1,2)->0, (3,4,5)->3 i wygląda tak: 0,3,6,9,...
-	tlog("B-> cacheAC: %p", state->heapCacheB);
-
+	thread_B_aggregate(localId, AGG_SAMPLE, AGG_TEST_3, state);
+	thread_B_aggregate(localId, AGG_TEST_3, AGG_TEST_6, state);
+	thread_B_aggregate(localId, AGG_TEST_6, AGG_TEST_18, state);
+	thread_B_aggregate(localId, AGG_TEST_18, AGG_TEST_36, state);
+	thread_B_aggregate(localId, AGG_TEST_36, AGG_TEST_108, state);
+	//XXX teraz w heapie będą się minimzalizowały indeksy dlatego widać że działa skoro AGG_3 wyliczył z (0,1,2)->0, (3,4,5)->3 i wygląda tak: 0,3,6,9,...
+}
+__device__ void thread_C_copyLevel(const int localId, const int aggr, BlockState* state) {
+	//offset lokalny zależy tylko od stopnia agregacji (sterta nie jest wspóldzielona)
+	const int localOffset = getHeapOffset(state->heapCacheSamplesCount, aggr);
+	//offset lokalny zależy od tego, ile było iteracji głównych i ile pozostałe bloki obliczyły
+	const int globalAggOffset = getAggOffset(state->numSamples, aggr);	//globalnie agregacja zaczyna się od tej pozycji
+	const int numLocalAggChunks = state->num_B_threads * state->partSize / aggr;	//ile w tym bloku wyliczono elementów danej agregacji
+	const int firstWriteAgg = state->firstWritePart * numLocalAggChunks;	//globalny indeks pierwszej agregacji tego typu w tym bloku
+	const int globalDestination = globalAggOffset + firstWriteAgg;
+	parallelCopy(localId, state->num_C_threads, numLocalAggChunks, &state->heapCacheAC[localOffset], &state->outPointers.min[globalDestination]);
 }
 __device__ void thread_C_iter(const int i, const int localId, BlockState *state) {
-
+	if (localId == 0)
+		tlog("C: iter %d", i);
+	/*
+	 * zadanie polega na skopiowaniu równoległym sterty shared piętro po piętrze ponieważ trzeba wtasować się w wyniki z innych bloków i iteracji
+	 *
+	 */
+	thread_C_copyLevel(localId, AGG_TEST_3, state);
 }
 
-__global__ void kernel_manager(int numSamples, float *samples, AggrPointers *outPointers) {
+__global__ void kernel_manager(int numSamples, float *samples, AggrPointers outPointers) {
 	extern __shared__ float shared[];
 	BlockState *state = (BlockState*) shared;
 	if (threadIdx.x == 0) { //zainicjalizujmy stan
-		setupBlockState(state, numSamples, samples);
+		setupBlockState(state, numSamples, samples, outPointers);
 	}
 	__syncthreads();
 
@@ -199,18 +213,18 @@ __global__ void kernel_manager(int numSamples, float *samples, AggrPointers *out
 			thread_B_iter(i, numIterations, localId_B, state);
 		}
 		else if (threadIsC && i > 1) { //to jest wątek typu C
-
+			thread_C_iter(i, localId_C, state);
 		}
 		__syncthreads();
-		if (threadIdx.x == 0 && i > 0) {
-			printHeap(state->heapCacheSamplesCount, state->heapCacheB);
-		}
+//		if (threadIdx.x == 0 && i > 0) {
+//			printHeap(state->heapCacheSamplesCount, state->heapCacheB);
+//		}
 		if (threadIdx.x == 0) {
 			updateBlockState(i, numSamples, state);
 		}
 		__syncthreads();
-		if (i == 1)
-			break; //FIXME REMOVE
+//		if (i == 2)
+//			break; //FIXME REMOVE
 
 	}
 

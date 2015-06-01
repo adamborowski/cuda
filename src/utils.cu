@@ -38,6 +38,8 @@ float* ReadFile(const char* name, int* count) {
 
 	while (fgets(line, 1024, file)) {
 		sscanf(line, "%*s %f", &buffer[_count]);
+		//TODO remove below line
+		buffer[_count] = _count;
 		if (buffer[_count] < testMin) {
 			testMin = buffer[_count];
 		}

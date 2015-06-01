@@ -71,7 +71,7 @@ void process(const char* name, int argc, char **argv) {
 	output.max = d_aggr_max;
 	output.avg = d_aggr_avg;
 
-	kernel_manager<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, &output);	//todo sharedSize zmienic na nowy sposob liczenia
+	kernel_manager<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, output);	//todo sharedSize zmienic na nowy sposob liczenia
 	/*
 	 agg_kernel_1<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
 	 //wywołanie kernela zbierającego dane z niezależnych bloków (zatem mamy tylko jeden blok)
@@ -86,7 +86,7 @@ void process(const char* name, int argc, char **argv) {
 	checkCudaErrors(cudaMemcpy(h_aggr_max, d_aggr_max, aggHeapSize, cudaMemcpyDeviceToHost));
 	checkCudaErrors(cudaMemcpy(h_aggr_avg, d_aggr_avg, aggHeapSize, cudaMemcpyDeviceToHost));
 #ifdef DEBUG
-//	printHeap(numSamples, h_aggr_min);
+	printAggHeap(numSamples, h_aggr_min);
 #else
 	//TODO stdout binary output
 #endif
