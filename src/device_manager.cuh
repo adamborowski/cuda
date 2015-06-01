@@ -177,7 +177,7 @@ __device__ void thread_B_iter(const int i, const int numIterations, const int lo
 		input.max = &state->heapCacheB[myInputOffset + j * stepSize];
 		input.avg = &state->heapCacheB[myInputOffset + j * stepSize];
 		device_count_aggregation(stepSize, input, &output);
-		state->heapCacheB[myOutputOffset + i] = output.min;
+		state->heapCacheB[myOutputOffset + j] = output.min;
 	}
 	//TODO teraz w heapie będą się minimzalizowały indeksy dlatego widać że działa skoro AGG_3 wyliczył z (0,1,2)->0, (3,4,5)->3 i wygląda tak: 0,3,6,9,...
 	tlog("B-> cacheAC: %p", state->heapCacheB);
