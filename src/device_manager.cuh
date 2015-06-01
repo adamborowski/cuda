@@ -109,42 +109,27 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 	 */
 	//ile elementów trzeba skopiować w bloku w jednej iteracji?
 	const int numElementsToCopyByBlock = state->num_B_threads * state->partSize;
+	//TODO numElementsToCopyByBlock musi uwzględnić że dla tego bloku jest mniej danych ze względu na wyrównanie
 	//ile wątków kopiuje?
 	const int numCopyingThreads = state->num_A_threads;
-	//ile elementów ma skopiować pojedyczny wątek grupy A? Tyle będzie iteracji?
-	const int numElementsToCopyByThread = divceil(numElementsToCopyByBlock, numCopyingThreads);
-	//wsaźnik elementu w iteracji
-	int globalElementIndex, localElementIndex;
-
 	//w tej iteracji grupa A w bloku kopiuje ileś partii
-	const int startingPart = state->firstReadPart;
-	const int startingElement = startingPart * state->partSize;
-	const int numSamples = state->numSamples;
+	const int startingElement = state->firstReadPart * state->partSize;
+#ifdef DEBUG
 	if (localId == 0)
-		tlog("A: iter %d, starting part %d el %d", i, startingPart, startingElement);
-//	dbgi(numElementsToCopyByThread);
+		tlog("A: iter %d, starting part %d el %d", i, state->firstReadPart, startingElement);
 	cleanArray(getHeapOffset(numElementsToCopyByBlock, AGG_ALL), state->heapCacheAC);
-	for (int j = 0; j < numElementsToCopyByThread; j++) {
-		localElementIndex = j * numCopyingThreads + localId;
-		globalElementIndex = startingElement + localElementIndex;
-		//załaduj element z global do cache AC
-		if (localElementIndex < numElementsToCopyByBlock && globalElementIndex < numSamples) {
-//			state->heapCacheAC[localElementIndex] = state->samples[globalElementIndex];
-			state->heapCacheAC[localElementIndex] = globalElementIndex;	//Test
-//			tlog("i: %d j:%d (%d -> %d) #%d %f=%f", i, j, globalElementIndex, localElementIndex, state->numSamples, state->heapCacheAC[localElementIndex], state->samples[globalElementIndex]);
-		}
+#endif
 
-	}
-//	if(blockIdx.x==0 && threadIdx.x==0 && i==0){
-//		printHeap(state->heapCacheSamplesCount, state->heapCacheAC);
-//	}
-
+	parallelCopy(
+			localId, numCopyingThreads, numElementsToCopyByBlock,
+			&state->samples[startingElement], state->heapCacheAC,
+			true);
 }
 /*
  * Wykonuje agregację dla zakresu elementów
  * zapewnia obliczenie poprawnego elementu wejściowego i wyjściowego sterty (w zależności od nr wątku)
  */
-__device__ void thread_B_aggregate(const int inputAggr, const int outputAggr, const BlockState *state){
+__device__ void thread_B_aggregate(const int inputAggr, const int outputAggr, const BlockState *state) {
 
 }
 __device__ void thread_B_iter(const int i, const int numIterations, const int localId, const BlockState *state) {
@@ -167,11 +152,12 @@ __device__ void thread_B_iter(const int i, const int numIterations, const int lo
 	const int sharedHeapOutputOffset = getHeapOffset(state->heapCacheSamplesCount, outputAggr);
 	const int myInputOffset = sharedHeapInputOffset + localId * numInputElementsPerThread;
 	const int myOutputOffset = sharedHeapOutputOffset + localId * numOutputElementsPerThread;
-	//XXX założenie - tylko MIN (jak będzie działać, doda się max i avg)
+//XXX założenie - tylko MIN (jak będzie działać, doda się max i avg)
 
-	//iteracja 1 -> 3
+//iteracja 1 -> 3
 	const int numOutputChunks = getAggCount(myNumSamples, outputAggr);
 	tlog("localId: %d, %d -> %d", localId, myInputOffset, myOutputOffset);
+
 	for (int j = 0; j < numOutputChunks; j++) {
 		input.min = &state->heapCacheB[myInputOffset + j * stepSize];
 		input.max = &state->heapCacheB[myInputOffset + j * stepSize];
@@ -179,7 +165,7 @@ __device__ void thread_B_iter(const int i, const int numIterations, const int lo
 		device_count_aggregation(stepSize, input, &output);
 		state->heapCacheB[myOutputOffset + j] = output.min;
 	}
-	//TODO teraz w heapie będą się minimzalizowały indeksy dlatego widać że działa skoro AGG_3 wyliczył z (0,1,2)->0, (3,4,5)->3 i wygląda tak: 0,3,6,9,...
+//TODO teraz w heapie będą się minimzalizowały indeksy dlatego widać że działa skoro AGG_3 wyliczył z (0,1,2)->0, (3,4,5)->3 i wygląda tak: 0,3,6,9,...
 	tlog("B-> cacheAC: %p", state->heapCacheB);
 
 }
