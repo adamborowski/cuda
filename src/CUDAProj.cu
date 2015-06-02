@@ -80,6 +80,8 @@ void process(const char* name, int argc, char **argv) {
 	output.max = d_aggr_max;
 	output.avg = d_aggr_avg;
 
+	Timer timer  = createTimer();
+
 	kernel_manager<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(settings, numSamples, d_samples, output);	//todo sharedSize zmienic na nowy sposob liczenia
 	/*
 	 agg_kernel_1<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
@@ -92,6 +94,11 @@ void process(const char* name, int argc, char **argv) {
 	 */
 
 	cudaDeviceSynchronize();
+
+	tickTimer(&timer);
+
+	printf("\n__________________________________\n\nprocess time: %f\n__________________________________\n", timer.duration);
+
 	CHECK_SINGLE_ERROR()
 			;
 	checkCudaErrors(cudaMemcpy(h_aggr_min, d_aggr_min, aggHeapSize, cudaMemcpyDeviceToHost));

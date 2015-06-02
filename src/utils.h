@@ -12,6 +12,8 @@ float* ReadFile(const char* name, int* count);
 void testIO();
 int initCuda(int argc, char ** argv);
 
+
+
 double mclock();
 
 #define NEXT_ARRAY(array, size) &(array[size])
@@ -41,5 +43,14 @@ do {                                                                  \
 		                 __FILE__, __LINE__, cudaGetErrorName(err),cudaGetErrorString(err) );       \
 		        exit(EXIT_FAILURE);                                           \
 		    }}
+
+struct Timer {
+        clock_t lastTick;
+        float duration;
+};
+
+Timer createTimer();
+
+float tickTimer(Timer* timer);
 
 #endif /* UTILS_H_ */

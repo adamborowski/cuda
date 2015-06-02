@@ -95,3 +95,19 @@ double mclock() {
 	usec = double(tp.tv_usec) / 1E6;
 	return sec + usec;
 }
+
+Timer createTimer() {
+        Timer timer;
+        timer.duration = 0;
+        timer.lastTick = clock();
+        return timer;
+}
+
+float tickTimer(Timer* timer) {
+        clock_t end = clock(); //kończ mierzenie u mastera
+        timer->duration = (float) (end - timer->lastTick) / CLOCKS_PER_SEC;
+        timer->lastTick=end;
+        return timer->duration;
+}
+
+
