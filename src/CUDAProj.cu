@@ -22,7 +22,7 @@ void process(const char* name, int argc, char **argv) {
 	float *h_samples, *h_aggr_min, *h_aggr_max, *h_aggr_avg;
 	float *d_samples, *d_aggr_min, *d_aggr_max, *d_aggr_avg;
 	// This will pick the best possible CUDA capable device
-	initCuda(argc, argv);
+	int deviceId = initCuda(argc, argv);
 	//allocate memory on cpu
 	h_samples = ReadFile(name, &numSamples);
 
@@ -61,6 +61,14 @@ void process(const char* name, int argc, char **argv) {
 	bs.partSize = AGG_TEST_108;
 	bs.num_B_threads = SETTINGS_GROUP_B_SIZE;
 	int cacheSize = initializeSharedMemory(&bs);
+
+	cudaDeviceProp devProp;
+	cudaGetDeviceProperties(&devProp, deviceId);
+	if (cacheSize > devProp.sharedMemPerBlock) {
+		fprintf(stderr, "Requred cache (%dB) cannot be allocated. Only %dB allowed. Try decrease SETTINGS_GROUP_B_SIZE.", cacheSize, (int) devProp.sharedMemPerBlock);
+		exit(-1);
+	}
+
 #ifdef DEBUG
 //	printf("host address device min: %p, max: %p, avg: %p\n", d_aggr_min, d_aggr_max, d_aggr_avg);
 	printf("{HOST} threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, cacheSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
@@ -82,6 +90,9 @@ void process(const char* name, int argc, char **argv) {
 
 	 */
 
+	cudaDeviceSynchronize();
+	CHECK_SINGLE_ERROR()
+			;
 	checkCudaErrors(cudaMemcpy(h_aggr_min, d_aggr_min, aggHeapSize, cudaMemcpyDeviceToHost));
 	checkCudaErrors(cudaMemcpy(h_aggr_max, d_aggr_max, aggHeapSize, cudaMemcpyDeviceToHost));
 	checkCudaErrors(cudaMemcpy(h_aggr_avg, d_aggr_avg, aggHeapSize, cudaMemcpyDeviceToHost));

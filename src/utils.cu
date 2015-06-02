@@ -62,7 +62,7 @@ void testIO() {
 	printf("Lines loaded: %d\n", count);
 }
 
-void initCuda(int argc, char ** argv) {
+int initCuda(int argc, char ** argv) {
 	cudaDeviceProp deviceProp;
 	int devID = findCudaDevice(argc, (const char **) argv);
 
@@ -83,7 +83,7 @@ void initCuda(int argc, char ** argv) {
 		cudaDeviceReset();
 		exit(EXIT_SUCCESS);
 	}
-
+	return devID;
 }
 
 double mclock() {

@@ -113,6 +113,7 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 		tlog("A: iter %d, starting part %d el %d", i, state->firstReadPart, startingElement);
 	cleanArray(getHeapOffset(numElementsToCopyByBlock, AGG_ALL), state->heapCacheAC);
 #endif
+	//TODO trzeba zapewnić aby nie kopiował zbyt dużo ale samo wczytanie nam nie szkodzi dopóki nie będzie segmentation fault
 
 	parallelCopy(
 			localId, numCopyingThreads, numElementsToCopyByBlock,
@@ -137,7 +138,12 @@ __device__ void thread_B_aggregate(const int localId, const int inputAggr, const
 		input.max = input.min;	//TODO uproszczenie
 		input.avg = input.min;	//TODO uproszczenie
 		//todo dodać realChunkSize
+
 		device_count_aggregation(aggChunkSize, input, &output);
+		if (output.min < 0) {
+			//FIXME tutaj czasami pożera śmieci. Czy to bierze się z align problem?? zbadać
+			tlog("paranormal: chunk size: %d", aggChunkSize);
+		}
 		state->heapCacheB[outputOffset + i] = output.min;
 	}
 }
@@ -152,15 +158,32 @@ __device__ void thread_B_iter(const int i, const int numIterations, const int lo
 	thread_B_aggregate(localId, AGG_TEST_36, AGG_TEST_108, state);
 	//XXX teraz w heapie będą się minimzalizowały indeksy dlatego widać że działa skoro AGG_3 wyliczył z (0,1,2)->0, (3,4,5)->3 i wygląda tak: 0,3,6,9,...
 }
-__device__ void thread_C_copyLevel(const int localId, const int aggr, BlockState* state) {
+__device__ void thread_C_copyLevel(const int localId, const int inputAggr, const int outputAggr, BlockState* state) {
 	//offset lokalny zależy tylko od stopnia agregacji (sterta nie jest wspóldzielona)
-	const int localOffset = getHeapOffset(state->heapCacheSamplesCount, aggr);
+	const int localOffset = getHeapOffset(state->heapCacheSamplesCount, outputAggr);
 	//offset lokalny zależy od tego, ile było iteracji głównych i ile pozostałe bloki obliczyły
-	const int globalAggOffset = getAggOffset(state->numSamples, aggr);	//globalnie agregacja zaczyna się od tej pozycji
-	const int numLocalAggChunks = state->num_B_threads * state->partSize / aggr;	//ile w tym bloku wyliczono elementów danej agregacji
-	const int firstWriteAgg = state->firstWritePart * numLocalAggChunks;	//globalny indeks pierwszej agregacji tego typu w tym bloku
+	const int globalAggOffset = getAggOffset(state->numSamples, outputAggr);	//globalnie agregacja zaczyna się od tej pozycji
+	const int numAggInPart = state->partSize / outputAggr;	//ile tego typu agregacji mieści sie w pojedynczej partii
+	const int numLocalAggChunks = state->num_B_threads * numAggInPart;	//ile w tym bloku wyliczono elementów danej agregacji
+	const int firstWriteAgg = state->firstWritePart * numAggInPart;	//globalny indeks pierwszej agregacji tego typu w tym bloku
 	const int globalDestination = globalAggOffset + firstWriteAgg;
-	parallelCopy(localId, state->num_C_threads, numLocalAggChunks, &state->heapCacheAC[localOffset], &state->outPointers.min[globalDestination]);
+
+	//tutaj trzeba zabezpieczyć aby nie wyjść poza faktyczny rozmiar
+	//ile w bloku będziemy mieli elementów do skopiowania?
+	//ile elementów przyjmie global?
+	const int globalFirstChunkIndex = firstWriteAgg;
+	const int globalNumAgg = getAggCount(state->numSamples, outputAggr);
+
+	int dataLength;
+	if (globalFirstChunkIndex + numLocalAggChunks < globalNumAgg) {
+		dataLength = numLocalAggChunks;
+	}
+	else {
+		dataLength = globalNumAgg - globalFirstChunkIndex;
+//		tlog("data length: %d", dataLength);
+	}
+//	tlog("firstWriteAgg: %d, fixed: %d real: %d", firstWriteAgg, numLocalAggChunks, realNumLocalAggChunks);
+	parallelCopy(localId, state->num_C_threads, dataLength, &state->heapCacheAC[localOffset], &state->outPointers.min[globalDestination]);
 }
 __device__ void thread_C_iter(const int i, const int localId, BlockState *state) {
 	if (localId == 0)
@@ -169,7 +192,11 @@ __device__ void thread_C_iter(const int i, const int localId, BlockState *state)
 	 * zadanie polega na skopiowaniu równoległym sterty shared piętro po piętrze ponieważ trzeba wtasować się w wyniki z innych bloków i iteracji
 	 *
 	 */
-	thread_C_copyLevel(localId, AGG_TEST_3, state);
+	thread_C_copyLevel(localId, AGG_SAMPLE, AGG_TEST_3, state);
+	thread_C_copyLevel(localId, AGG_TEST_3, AGG_TEST_6, state);
+	thread_C_copyLevel(localId, AGG_TEST_6, AGG_TEST_18, state);
+	thread_C_copyLevel(localId, AGG_TEST_18, AGG_TEST_36, state);
+	thread_C_copyLevel(localId, AGG_TEST_36, AGG_TEST_108, state);
 }
 
 __global__ void kernel_manager(int numSamples, float *samples, AggrPointers outPointers) {

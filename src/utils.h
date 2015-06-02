@@ -10,7 +10,7 @@
 
 float* ReadFile(const char* name, int* count);
 void testIO();
-void initCuda(int argc, char ** argv);
+int initCuda(int argc, char ** argv);
 
 double mclock();
 
@@ -33,5 +33,13 @@ do {                                                                  \
         exit(EXIT_FAILURE);                                           \
     }                                                                 \
 } while (0)
+
+#define CHECK_SINGLE_ERROR(){\
+		cudaError_t err = cudaGetLastError();                             \
+		    if (cudaSuccess != err) {                                         \
+		        fprintf (stderr, "Cuda error in file '%s' in line %i : %s. %s.\n",\
+		                 __FILE__, __LINE__, cudaGetErrorName(err),cudaGetErrorString(err) );       \
+		        exit(EXIT_FAILURE);                                           \
+		    }}
 
 #endif /* UTILS_H_ */

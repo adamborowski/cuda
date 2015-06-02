@@ -234,6 +234,8 @@ __device__ __host__ void printHeap(const int numSamples, float* heap) {
  * @param numThreads - liczba wątków biorących udział w kopiowaniu
  */
 __device__ void parallelCopy(const int localThreadId, const int numThreads, const int numElements, float* src, float* dst) {
+	if (numElements <= 0)
+		return;
 	const int numElementsPerThread = divceil(numElements, numThreads);
 	for (int i = 0; i < numElementsPerThread; i++) {
 		const int index = i * numThreads + localThreadId;
