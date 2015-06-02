@@ -17,6 +17,7 @@
 #include "device_manager.cuh"
 
 void process(const char* name, int argc, char **argv) {
+	Settings settings = initSettings(argc, argv);
 	//nowe deklaracje
 	int numSamples, aggHeapCount, aggHeapSize;
 	float *h_samples, *h_aggr_min, *h_aggr_max, *h_aggr_avg;
@@ -53,13 +54,13 @@ void process(const char* name, int argc, char **argv) {
 	//transfer samples from cpu to gpu
 	checkCudaErrors(cudaMemcpy(d_samples, h_samples, numSamples * sizeof(float), cudaMemcpyHostToDevice));
 	//tworzymy tyle wątków ile potrzeba do policzenia najmniejszej agregacji
-	int threadsPerBlock = SETTINGS_GROUP_A_SIZE + SETTINGS_GROUP_B_SIZE + SETTINGS_GROUP_C_SIZE;
-	int blocksPerGrid = SETTINGS_NUM_BLOCKS;
+	int threadsPerBlock = settings.GROUP_A_SIZE + settings.GROUP_B_SIZE + settings.GROUP_C_SIZE;
+	int blocksPerGrid = settings.NUM_BLOCKS;
 
 	//calculate cacheSize
 	BlockState bs;
 	bs.partSize = AGG_TEST_108;
-	bs.num_B_threads = SETTINGS_GROUP_B_SIZE;
+	bs.num_B_threads = settings.GROUP_B_SIZE;
 	int cacheSize = initializeSharedMemory(&bs);
 
 	cudaDeviceProp devProp;
@@ -79,7 +80,7 @@ void process(const char* name, int argc, char **argv) {
 	output.max = d_aggr_max;
 	output.avg = d_aggr_avg;
 
-	kernel_manager<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, output);	//todo sharedSize zmienic na nowy sposob liczenia
+	kernel_manager<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(settings, numSamples, d_samples, output);	//todo sharedSize zmienic na nowy sposob liczenia
 	/*
 	 agg_kernel_1<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(numSamples, d_samples, cacheSize, d_aggr_min, d_aggr_max, d_aggr_avg);
 	 //wywołanie kernela zbierającego dane z niezależnych bloków (zatem mamy tylko jeden blok)

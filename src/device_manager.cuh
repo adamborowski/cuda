@@ -34,6 +34,7 @@ struct BlockState {
 	int heapCacheCount;
 	int heapCacheSamplesCount;
 	AggrPointers outPointers;
+	Settings settings;
 };
 /*
  * @return ile bajtów zajmuje shared memory
@@ -59,14 +60,14 @@ __device__ __host__ long initializeSharedMemory(BlockState *state) {
 
 __device__ void setupBlockState(BlockState *state, int numSamples, float *samples, AggrPointers outPointers) {
 	const int threadsPerBlock = blockDim.x;
-	int numCountThreads = threadsPerBlock - (SETTINGS_GROUP_A_SIZE + SETTINGS_GROUP_C_SIZE); //jeśli mamy 10 wątków to A=3 B=4 C=3
+	int numCountThreads = threadsPerBlock - (state->settings.GROUP_A_SIZE + state->settings.GROUP_C_SIZE); //jeśli mamy 10 wątków to A=3 B=4 C=3
 	//
 	state->numSamples = numSamples;
 	state->partSize = AGG_TEST_108;
 	//
-	state->num_A_threads = SETTINGS_GROUP_A_SIZE;
+	state->num_A_threads = state->settings.GROUP_A_SIZE;
 	state->num_B_threads = numCountThreads;
-	state->num_C_threads = SETTINGS_GROUP_C_SIZE;
+	state->num_C_threads = state->settings.GROUP_C_SIZE;
 
 	state->firstReadPart = blockIdx.x * state->num_B_threads; //w pierwszej fazie trzeba ustawić na prawidłowy indeks pierwszej paczki dla bloku
 	state->firstCountPart = -1; //w pierwszej fazie nie ma czego liczyć
@@ -98,10 +99,6 @@ __device__ void updateBlockState(int i, const int numSamples, BlockState* state)
 }
 
 __device__ void thread_A_iter(const int i, const int numIterations, const int localId, const BlockState *state) {
-	/*
-	 * TODO przenieść zmienne lokalne iteracji do struktury która by była definiowana raz przez init_thread_A
-	 * zrobić to na etap III
-	 */
 	//ile elementów trzeba skopiować w bloku w jednej iteracji?
 	const int numElementsToCopyByBlock = state->num_B_threads * state->partSize;
 	const int numCopyingThreads = state->num_A_threads;
@@ -196,10 +193,11 @@ __device__ void thread_C_iter(const int i, const int localId, BlockState *state)
 	thread_C_copyLevel(localId, AGG_TEST_36, AGG_TEST_108, state);
 }
 
-__global__ void kernel_manager(int numSamples, float *samples, AggrPointers outPointers) {
+__global__ void kernel_manager(Settings settings, int numSamples, float *samples, AggrPointers outPointers) {
 	extern __shared__ float shared[];
 	BlockState *state = (BlockState*) shared;
 	if (threadIdx.x == 0) { //zainicjalizujmy stan
+		state->settings=settings;
 		setupBlockState(state, numSamples, samples, outPointers);
 	}
 	__syncthreads();
