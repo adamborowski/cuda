@@ -70,16 +70,15 @@ void process(const char* name, int argc, char **argv) {
 		exit(-1);
 	}
 
-#ifdef DEBUG
 //	printf("host address device min: %p, max: %p, avg: %p\n", d_aggr_min, d_aggr_max, d_aggr_avg);
-	printf("{HOST} threadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, cacheSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
-#endif
+	printf("ThreadsPerBlock = %d, blocksPerGrid = %d, totalThreads = %d, cacheSize = %d\n", threadsPerBlock, blocksPerGrid, threadsPerBlock * blocksPerGrid, cacheSize);
 
 	AggrPointers output;
 	output.min = d_aggr_min;
 	output.max = d_aggr_max;
 	output.avg = d_aggr_avg;
 
+	printf("\n__________________________________\n\n\ttimer started.\n__________________________________\n");
 	Timer timer  = createTimer();
 
 	kernel_manager<<<blocksPerGrid, threadsPerBlock, cacheSize>>>(settings, numSamples, d_samples, output);	//todo sharedSize zmienic na nowy sposob liczenia
@@ -97,7 +96,7 @@ void process(const char* name, int argc, char **argv) {
 
 	tickTimer(&timer);
 
-	printf("\n__________________________________\n\nprocess time: %f\n__________________________________\n", timer.duration);
+	printf("\n__________________________________\n\n\tprocess time: %f\n__________________________________\n", timer.duration);
 
 	CHECK_SINGLE_ERROR()
 			;

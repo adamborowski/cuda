@@ -105,7 +105,7 @@ Timer createTimer() {
 
 float tickTimer(Timer* timer) {
         clock_t end = clock(); //kończ mierzenie u mastera
-        timer->duration = (float) (end - timer->lastTick) / CLOCKS_PER_SEC;
+        timer->duration = (double) (end - timer->lastTick) / (double)CLOCKS_PER_SEC;
         timer->lastTick=end;
         return timer->duration;
 }

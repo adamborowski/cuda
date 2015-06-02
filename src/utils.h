@@ -46,7 +46,7 @@ do {                                                                  \
 
 struct Timer {
         clock_t lastTick;
-        float duration;
+        double duration;
 };
 
 Timer createTimer();
