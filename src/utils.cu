@@ -45,6 +45,7 @@ float* ReadFile(const char* name, int* count) {
 		}
 		_count++;
 	}
+	_count = (_count / AGG_TEST_108) * AGG_TEST_108; //FIXME wyrównanie
 	printf("\n~~~~~~~~~~~~~~ TEST MIN: %f ~~~~~~~~~~~~~~\n", testMin);
 	float* goodArray = (float*) malloc(sizeof(float) * _count);
 	memcpy(goodArray, buffer, _count * sizeof(float));

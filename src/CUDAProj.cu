@@ -114,8 +114,9 @@ void process(const char* name, int argc, char **argv) {
 }
 int main(int argc, char **argv) {
 #ifdef TEST
+	process("data/Osoba_concat.txt", argc, argv);
 //	process("Test_data.txt", argc, argv);
-	process("data/Osoba_2000linii.txt", argc, argv);
+//	process("data/Osoba_2000linii.txt", argc, argv);
 //	process("data/Osoba_1row.txt", argc, argv);
 #else
 	process("data/Osoba_concat.txt", argc, argv);

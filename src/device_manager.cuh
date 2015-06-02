@@ -104,7 +104,6 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 	 */
 	//ile elementów trzeba skopiować w bloku w jednej iteracji?
 	const int numElementsToCopyByBlock = state->num_B_threads * state->partSize;
-	//TODO numElementsToCopyByBlock musi uwzględnić że dla tego bloku jest mniej danych ze względu na wyrównanie
 	const int numCopyingThreads = state->num_A_threads;
 	//w tej iteracji grupa A w bloku kopiuje ileś partii
 	const int startingElement = state->firstReadPart * state->partSize;
@@ -113,7 +112,6 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 		tlog("A: iter %d, starting part %d el %d", i, state->firstReadPart, startingElement);
 	cleanArray(getHeapOffset(numElementsToCopyByBlock, AGG_ALL), state->heapCacheAC);
 #endif
-	//TODO trzeba zapewnić aby nie kopiował zbyt dużo ale samo wczytanie nam nie szkodzi dopóki nie będzie segmentation fault
 
 	parallelCopy(
 			localId, numCopyingThreads, numElementsToCopyByBlock,
@@ -137,19 +135,16 @@ __device__ void thread_B_aggregate(const int localId, const int inputAggr, const
 		input.min = &state->heapCacheB[inputOffset + i * aggChunkSize];
 		input.max = input.min;	//TODO uproszczenie
 		input.avg = input.min;	//TODO uproszczenie
-		//todo dodać realChunkSize
-
 		device_count_aggregation(aggChunkSize, input, &output);
-		if (output.min < 0) {
-			//FIXME tutaj czasami pożera śmieci. Czy to bierze się z align problem?? zbadać
-			tlog("paranormal: chunk size: %d", aggChunkSize);
-		}
+		//co z align?
 		state->heapCacheB[outputOffset + i] = output.min;
 	}
 }
 __device__ void thread_B_iter(const int i, const int numIterations, const int localId, const BlockState *state) {
+#ifdef DEBUG
 	if (localId == 0)
 		tlog("B: iter %d", i);
+#endif
 
 	thread_B_aggregate(localId, AGG_SAMPLE, AGG_TEST_3, state);
 	thread_B_aggregate(localId, AGG_TEST_3, AGG_TEST_6, state);
@@ -186,8 +181,10 @@ __device__ void thread_C_copyLevel(const int localId, const int inputAggr, const
 	parallelCopy(localId, state->num_C_threads, dataLength, &state->heapCacheAC[localOffset], &state->outPointers.min[globalDestination]);
 }
 __device__ void thread_C_iter(const int i, const int localId, BlockState *state) {
+#ifdef DEBUG
 	if (localId == 0)
 		tlog("C: iter %d", i);
+#endif
 	/*
 	 * zadanie polega na skopiowaniu równoległym sterty shared piętro po piętrze ponieważ trzeba wtasować się w wyniki z innych bloków i iteracji
 	 *
