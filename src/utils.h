@@ -45,8 +45,9 @@ do {                                                                  \
 		    }}
 
 struct Timer {
-        clock_t lastTick;
-        double duration;
+        cudaEvent_t startEvent;
+        cudaEvent_t stopEvent;
+        float duration;
 };
 
 Timer createTimer();

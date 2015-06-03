@@ -65,7 +65,16 @@ void testIO() {
 
 int initCuda(int argc, char ** argv) {
 	cudaDeviceProp deviceProp;
-	int devID = findCudaDevice(argc, (const char **) argv);
+
+	int devID=0;
+	if(argc==6){
+		devID=atoi(argv[5]);
+	}
+
+	printf("\n====================\nworking on device ID: %d\n====================\n", devID);
+
+
+	cudaSetDevice(devID);
 
 	if (devID < 0) {
 		printf("exiting...\n");
@@ -98,15 +107,17 @@ double mclock() {
 
 Timer createTimer() {
         Timer timer;
+        cudaEventCreate(&timer.startEvent);
+        cudaEventCreate(&timer.stopEvent);
+        cudaEventRecord(timer.startEvent, 0);
         timer.duration = 0;
-        timer.lastTick = clock();
         return timer;
 }
 
 float tickTimer(Timer* timer) {
-        clock_t end = clock(); //kończ mierzenie u mastera
-        timer->duration = (double) (end - timer->lastTick) / (double)CLOCKS_PER_SEC;
-        timer->lastTick=end;
+        cudaEventRecord(timer->stopEvent,0);
+        cudaEventSynchronize(timer->stopEvent);
+        cudaEventElapsedTime(&timer->duration, timer->startEvent, timer->stopEvent);
         return timer->duration;
 }
 

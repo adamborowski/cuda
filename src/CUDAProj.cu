@@ -96,7 +96,7 @@ void process(const char* name, int argc, char **argv) {
 
 	tickTimer(&timer);
 
-	printf("\n__________________________________\n\n\tprocess time: %f\n__________________________________\n", timer.duration);
+	printf("\n__________________________________\n\n\tprocess time: %f ms\n__________________________________\n", timer.duration);
 
 	CHECK_SINGLE_ERROR()
 			;
@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
 	process("data/Osoba_concat.txt", argc, argv);
 //	process("Test_data.txt", argc, argv);
 //	process("data/Osoba_2000linii.txt", argc, argv);
-//	process("data/Osoba_1row.txt", argc, argv);
+	//process("data/Osoba_1row.txt", argc, argv);
 #else
 	process("data/Osoba_concat.txt", argc, argv);
 #endif
