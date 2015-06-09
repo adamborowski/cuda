@@ -238,7 +238,8 @@ __device__ void parallelCopy(const int localThreadId, const int numThreads, cons
 		return;
 	const int numElementsPerThread = divceil(numElements, numThreads);
 	for (int i = 0; i < numElementsPerThread; i++) {
-		const int index = i * numThreads + localThreadId;
+//		const int index = i * numThreads + localThreadId;
+		const int index = i + numThreads * localThreadId;//bez optymalizacji memory coalesing
 		if (index < numElements) {
 			dst[index] = src[index];
 		}
