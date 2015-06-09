@@ -5,8 +5,8 @@ import os
 from registers import *
 
 criteria = {
-    "inputSize": [200, 2000, 20000, 200000, 2000000],
-    "numBThreads": [1, 2, 4, 8, 16],
+    "inputSize": [2000, 20000, 200000, 2000000],
+    "numBThreads": [2, 4, 8, 16],
     "numBlocks": [1, 10, 100, 300, 400],
     "device": [0, 1]
 }
@@ -31,10 +31,10 @@ while True:
           "{0[numBThreads]} 128 {0[numBlocks]} {0[device]} {0[inputSize]}" \
           " | grep -oPe \"(?<=process time: )(.*)(?= ms)\"".format(conf)
     results = []
-    numTests = 10
+    numTests = 5
     avg = 0
     # gather time results and calculate average
-    for i in range(1, numTests):
+    for i in range(0, numTests):
         time = float(os.popen(cmd).read())
         avg += time
         results.append(str(time))

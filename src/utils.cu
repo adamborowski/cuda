@@ -75,7 +75,7 @@ int initCuda(int argc, char ** argv) {
 	cudaDeviceProp deviceProp;
 
 	int devID = 0;
-	if (argc == 6) {
+	if (argc >= 6) {
 		devID = atoi(argv[5]);
 	}
 

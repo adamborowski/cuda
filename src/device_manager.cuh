@@ -102,11 +102,18 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 	//ile elementów trzeba skopiować w bloku w jednej iteracji?
 	const int numElementsToCopyByBlock = state->num_B_threads * state->partSize;
 	const int numCopyingThreads = state->num_A_threads;
+
+	//czy jest co kopiowac?
+	if (state->firstReadPart >= state->numParts) {
+		return;
+	}
+
 	//w tej iteracji grupa A w bloku kopiuje ileś partii
 	const int startingElement = state->firstReadPart * state->partSize;
+
 #ifdef DEBUG
 	if (localId == 0)
-		tlog("A: iter %d, starting part %d el %d", i, state->firstReadPart, startingElement);
+	tlog("A: iter %d, starting part %d el %d", i, state->firstReadPart, startingElement);
 	cleanArray(getHeapOffset(numElementsToCopyByBlock, AGG_ALL), state->heapCacheAC);
 #endif
 
@@ -121,6 +128,12 @@ __device__ void thread_A_iter(const int i, const int numIterations, const int lo
 __device__ void thread_B_aggregate(const int localId, const int inputAggr, const int outputAggr, const BlockState *state) {
 	//skoro masz obliczyć jakąś agregację na pewnym zakresie, oblicz zakres wejściowy
 	//indeks początkowy w pamięci shared to heapOffset(inputAggr)+ileInputPozeraWatek
+
+	//czy jest co kopiowac?
+	if (state->firstCountPart >= state->numParts) {
+		return;
+	}
+
 	const int numInputElements = state->partSize / inputAggr;	//ile w bloku mamy bloków wejściowych
 	const int numOutputElements = state->partSize / outputAggr;
 	const int aggChunkSize = outputAggr / inputAggr;	//ile elementów jest agregowanych w jedno
@@ -140,7 +153,7 @@ __device__ void thread_B_aggregate(const int localId, const int inputAggr, const
 __device__ void thread_B_iter(const int i, const int numIterations, const int localId, const BlockState *state) {
 #ifdef DEBUG
 	if (localId == 0)
-		tlog("B: iter %d", i);
+	tlog("B: iter %d", i);
 #endif
 
 	thread_B_aggregate(localId, AGG_SAMPLE, AGG_TEST_3, state);
@@ -159,6 +172,11 @@ __device__ void thread_C_copyLevel(const int localId, const int inputAggr, const
 	const int numLocalAggChunks = state->num_B_threads * numAggInPart;	//ile w tym bloku wyliczono elementów danej agregacji
 	const int firstWriteAgg = state->firstWritePart * numAggInPart;	//globalny indeks pierwszej agregacji tego typu w tym bloku
 	const int globalDestination = globalAggOffset + firstWriteAgg;
+
+	//czy jest co kopiowac?
+	if (state->firstWritePart >= state->numParts) {
+		return;
+	}
 
 	//tutaj trzeba zabezpieczyć aby nie wyjść poza faktyczny rozmiar
 	//ile w bloku będziemy mieli elementów do skopiowania?
@@ -180,7 +198,7 @@ __device__ void thread_C_copyLevel(const int localId, const int inputAggr, const
 __device__ void thread_C_iter(const int i, const int localId, BlockState *state) {
 #ifdef DEBUG
 	if (localId == 0)
-		tlog("C: iter %d", i);
+	tlog("C: iter %d", i);
 #endif
 	/*
 	 * zadanie polega na skopiowaniu równoległym sterty shared piętro po piętrze ponieważ trzeba wtasować się w wyniki z innych bloków i iteracji
@@ -197,7 +215,7 @@ __global__ void kernel_manager(Settings settings, int numSamples, float *samples
 	extern __shared__ float shared[];
 	BlockState *state = (BlockState*) shared;
 	if (threadIdx.x == 0) { //zainicjalizujmy stan
-		state->settings=settings;
+		state->settings = settings;
 		setupBlockState(state, numSamples, samples, outPointers);
 	}
 	__syncthreads();

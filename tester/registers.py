@@ -1,5 +1,6 @@
 __author__ = 'adam'
 
+
 class CyclicRegister:
     def __init__(self, array):
         self.array = array
