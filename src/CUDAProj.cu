@@ -24,8 +24,19 @@ void process(const char* name, int argc, char **argv) {
 	float *d_samples, *d_aggr_min, *d_aggr_max, *d_aggr_avg;
 	// This will pick the best possible CUDA capable device
 	int deviceId = initCuda(argc, argv);
+	//mock data
+	numSamples = 10000;
+	if(argc>=7){
+		numSamples = atoi(argv[6]);
+	}
+
+
+
 	//allocate memory on cpu
-	h_samples = ReadFile(name, &numSamples);
+//	h_samples = ReadFile(name, &numSamples);
+	h_samples = getMockData(numSamples);
+
+	printf("\n[test for %d samples]\n", numSamples);
 
 	aggHeapCount = getAggOffset(numSamples, AGG_ALL);
 	aggHeapSize = aggHeapCount * sizeof(float);

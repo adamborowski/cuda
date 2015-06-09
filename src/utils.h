@@ -9,6 +9,7 @@
 #define UTILS_H_
 
 float* ReadFile(const char* name, int* count);
+float* getMockData(int count);
 void testIO();
 int initCuda(int argc, char ** argv);
 

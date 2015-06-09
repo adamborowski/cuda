@@ -57,6 +57,14 @@ float* ReadFile(const char* name, int* count) {
 	return goodArray;
 }
 
+float* getMockData(const int count) {
+	float* buffer = (float *) malloc(count*sizeof(float));
+	for (int i = 0; i < count; i++) {
+		buffer[i] = i;
+	}
+	return buffer;
+}
+
 void testIO() {
 	int count;
 	float* buffer = ReadFile("data/Osoba_concat.txt", &count);
@@ -66,13 +74,12 @@ void testIO() {
 int initCuda(int argc, char ** argv) {
 	cudaDeviceProp deviceProp;
 
-	int devID=0;
-	if(argc==6){
-		devID=atoi(argv[5]);
+	int devID = 0;
+	if (argc == 6) {
+		devID = atoi(argv[5]);
 	}
 
 	printf("\n====================\nworking on device ID: %d\n====================\n", devID);
-
 
 	cudaSetDevice(devID);
 
@@ -106,19 +113,18 @@ double mclock() {
 }
 
 Timer createTimer() {
-        Timer timer;
-        cudaEventCreate(&timer.startEvent);
-        cudaEventCreate(&timer.stopEvent);
-        cudaEventRecord(timer.startEvent, 0);
-        timer.duration = 0;
-        return timer;
+	Timer timer;
+	cudaEventCreate(&timer.startEvent);
+	cudaEventCreate(&timer.stopEvent);
+	cudaEventRecord(timer.startEvent, 0);
+	timer.duration = 0;
+	return timer;
 }
 
 float tickTimer(Timer* timer) {
-        cudaEventRecord(timer->stopEvent,0);
-        cudaEventSynchronize(timer->stopEvent);
-        cudaEventElapsedTime(&timer->duration, timer->startEvent, timer->stopEvent);
-        return timer->duration;
+	cudaEventRecord(timer->stopEvent, 0);
+	cudaEventSynchronize(timer->stopEvent);
+	cudaEventElapsedTime(&timer->duration, timer->startEvent, timer->stopEvent);
+	return timer->duration;
 }
-
 
